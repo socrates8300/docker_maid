@@ -3,13 +3,13 @@
 > Declare what agent sprawl looks like; docker_maid keeps it at zero.
 
 > [!IMPORTANT]
-> **Project status: design and bootstrap.** docker_maid is not implemented or
-> installable yet. The commands below describe the planned v0.1 interface.
+> **Project status: early implementation.** The configuration CLI works from
+> source. Docker inventory, cleanup, daemon, JSON mode, and TUI are not
+> implemented or released yet. Commands in planned sections do not work.
 
-docker_maid is a planned Rust CLI, daemon, and terminal UI for reclaiming
-Docker resources left behind by coding-agent workflows. It targets one Docker
-host at a time and puts deletion policy, protection, and auditability ahead of
-aggressive cleanup.
+docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
+behind by coding-agent workflows. It targets one Docker host at a time and puts
+deletion policy, protection, and auditability ahead of aggressive cleanup.
 
 The complete product contract is in the [PRD](PRD.md).
 
@@ -48,14 +48,29 @@ There is no `--yes` flag and no direct-delete shortcut in v1.
 All three interfaces use the same inventory, classification, planning, and
 execution core. Frontends contain no policy logic.
 
-## Planned quickstart
+## Available now
 
-These commands are interface examples. They do not work yet.
+Build the binary and generate, validate, or normalize a strict TOML
+configuration:
 
 ```sh
-# Generate a commented configuration file.
-docker_maid config default > docker_maid.toml
+cargo build
 
+cargo run -- config default > docker_maid.toml
+cargo run -- config check
+cargo run -- config print
+```
+
+Configuration lookup order is `--config <path>`, `./docker_maid.toml`, then
+`$XDG_CONFIG_HOME/docker_maid/config.toml`. Unknown keys and invalid safety
+invariants are errors. Configuration failures exit with code `3`.
+
+## Planned cleanup quickstart
+
+The commands in this section describe the planned v0.1 cleanup interface. They
+do not work yet.
+
+```sh
 # Review pending cleanup. Nothing is deleted.
 docker_maid plan
 
@@ -81,9 +96,9 @@ docker_maid tui
 
 The TUI will refuse to start unless both stdin and stdout are terminals.
 
-## Planned configuration
+## Configuration
 
-Policy will live in `docker_maid.toml`. This example adopts labeled agent
+Policy lives in `docker_maid.toml`. This example adopts labeled agent
 containers and removes them two hours after they stop:
 
 ```toml
@@ -136,8 +151,9 @@ exit codes are:
 
 ## Architecture
 
-docker_maid will use `bollard` for the Docker API, `tokio` for asynchronous
-execution, `clap` for the CLI, and `ratatui` with `crossterm` for the TUI.
+The implemented configuration slice uses `clap`, `serde`, `toml`, and
+`humantime`. Planned runtime layers will use `bollard` for the Docker API,
+`tokio` for asynchronous execution, and `ratatui` with `crossterm` for the TUI.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor, which rechecks the current
@@ -146,7 +162,7 @@ delete request.
 
 ## Roadmap
 
-- **M0 — Walking skeleton:** configuration, Docker inventory, and dry-run plans.
+- **M0 — Walking skeleton (in progress):** configuration, Docker inventory, and dry-run plans.
 - **M1 — Core engine:** cleanup rules, protection, daemon mode, and activity history.
 - **M2 — v0.1 interfaces:** TUI, stable machine schemas, reports, and releases.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
@@ -156,11 +172,17 @@ v1 boundary.
 
 ## Development
 
-The repository does not contain a Cargo project yet. Rust build, test, and
-contribution commands will be added with the M0 walking skeleton.
+The minimum supported Rust version is 1.91.
 
-Until then, use the [PRD](PRD.md) for product decisions and open an
-[issue](https://github.com/socrates8300/docker_maid/issues) for design feedback.
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+Use the [PRD](PRD.md) for product decisions and open an
+[issue](https://github.com/socrates8300/docker_maid/issues) for design or
+implementation feedback.
 
 ## License
 
