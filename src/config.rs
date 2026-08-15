@@ -157,6 +157,9 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut errors = Vec::new();
 
+        validate_regexes("protect.names", &self.protect.names, &mut errors);
+        validate_globs("protect.labels", &self.protect.labels, &mut errors);
+
         validate_duration(
             "defaults.interval",
             self.defaults.interval.as_deref(),
@@ -182,6 +185,11 @@ impl Config {
         for (index, rule) in self.rules.images.iter().enumerate() {
             let field = format!("rules.images[{index}]");
             validate_common_rule(&field, &rule.common, &mut errors);
+            validate_globs(
+                &format!("{field}.image_tag_patterns"),
+                &rule.image_tag_patterns,
+                &mut errors,
+            );
             validate_duration(
                 &format!("{field}.unused_for"),
                 rule.unused_for.as_deref(),
@@ -485,6 +493,13 @@ fn validate_common_rule(field: &str, rule: &CommonRule, errors: &mut Vec<String>
         errors.push(format!("{field}.select must not contain blank selectors"));
     }
 
+    validate_regexes(&format!("{field}.select.names"), &rule.select.names, errors);
+    validate_globs(
+        &format!("{field}.select.labels"),
+        &rule.select.labels,
+        errors,
+    );
+
     match (&rule.scope, rule.allow_unscoped) {
         (RuleScope::All, false) => errors.push(format!(
             "{field}.allow_unscoped must be true when scope = \"all\""
@@ -493,6 +508,26 @@ fn validate_common_rule(field: &str, rule: &CommonRule, errors: &mut Vec<String>
             "{field}.scope must be \"all\" when allow_unscoped = true"
         )),
         _ => {}
+    }
+}
+
+fn validate_regexes(field: &str, values: &[String], errors: &mut Vec<String>) {
+    for (index, value) in values.iter().enumerate() {
+        if value.trim().is_empty() {
+            errors.push(format!("{field}[{index}] must not be blank"));
+        } else if let Err(error) = regex::Regex::new(value) {
+            errors.push(format!("{field}[{index}] is not a valid regex: {error}"));
+        }
+    }
+}
+
+fn validate_globs(field: &str, values: &[String], errors: &mut Vec<String>) {
+    for (index, value) in values.iter().enumerate() {
+        if value.trim().is_empty() {
+            errors.push(format!("{field}[{index}] must not be blank"));
+        } else if let Err(error) = globset::Glob::new(value) {
+            errors.push(format!("{field}[{index}] is not a valid glob: {error}"));
+        }
     }
 }
 
@@ -555,6 +590,24 @@ mod tests {
         let config = Config::parse(source, Path::new("bad.toml")).expect("parse shape");
         let error = config.validate().expect_err("must reject duration");
         assert!(error.to_string().contains("defaults.interval"));
+    }
+
+    #[test]
+    fn invalid_regex_and_glob_selectors_are_rejected() {
+        let source = r#"
+[protect]
+labels = ["["]
+
+[[rules.networks]]
+name = "bad-regex"
+select.names = ["("]
+orphan = true
+"#;
+        let config = Config::parse(source, Path::new("bad.toml")).expect("parse shape");
+        let error = config.validate().expect_err("must reject invalid patterns");
+        let message = error.to_string();
+        assert!(message.contains("protect.labels[0]"));
+        assert!(message.contains("rules.networks[0].select.names[0]"));
     }
 
     #[test]

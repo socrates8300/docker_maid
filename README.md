@@ -3,9 +3,10 @@
 > Declare what agent sprawl looks like; docker_maid keeps it at zero.
 
 > [!IMPORTANT]
-> **Project status: early implementation.** The configuration CLI works from
-> source. Docker inventory, cleanup, daemon, JSON mode, and TUI are not
-> implemented or released yet. Commands in planned sections do not work.
+> **Project status: early implementation.** Strict configuration and the
+> read-only `plan` command work from source. Docker mutation, build-cache
+> inventory, daemon mode, JSON mode, and the TUI are not implemented or
+> released yet. Commands in planned sections do not work.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
 behind by coding-agent workflows. It targets one Docker host at a time and puts
@@ -48,7 +49,7 @@ There is no `--yes` flag and no direct-delete shortcut in v1.
 All three interfaces use the same inventory, classification, planning, and
 execution core. Frontends contain no policy logic.
 
-## Available now
+## Available now: configuration
 
 Build the binary and generate, validate, or normalize a strict TOML
 configuration:
@@ -63,15 +64,47 @@ cargo run -- config print
 
 Configuration lookup order is `--config <path>`, `./docker_maid.toml`, then
 `$XDG_CONFIG_HOME/docker_maid/config.toml`. Unknown keys and invalid safety
-invariants are errors. Configuration failures exit with code `3`.
+invariants are errors. Name regular expressions and label globs are validated
+before Docker is contacted. Configuration failures exit with code `3`.
 
-## Planned cleanup quickstart
+## Available now: read-only plan
 
-The commands in this section describe the planned v0.1 cleanup interface. They
-do not work yet.
+`plan` inventories containers, images, volumes, and networks through the Docker
+API. It applies the first matching rule, checks configured protection first,
+and prints only pending removals. It never changes Docker.
 
 ```sh
-# Review pending cleanup. Nothing is deleted.
+# Uses ./docker_maid.toml. Exit 1 means removals are pending.
+cargo run -- plan
+```
+
+The planner sorts by resource type, name, and immutable Docker ID. It identifies
+container image, volume, and network references before it evaluates orphan or
+unused policies. In this stateless slice, image `unused_for` and volume
+`orphan_for` are resource-age floors, not duration since last use; Docker does
+not expose a last-used or detach timestamp in these list responses. Built-in
+Docker networks are implicitly protected.
+
+The client uses `DOCKER_HOST` when it is set. Otherwise, it uses Docker's local
+default socket. If a named Docker context uses another socket, export that
+context's endpoint first. For example, Colima commonly uses:
+
+```sh
+export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
+cargo run -- plan
+```
+
+Build-cache records are not included in this implementation slice. A configured
+`rules.build_cache` section still validates, but `plan` does not inventory or
+report build cache yet.
+
+## Planned cleanup execution
+
+The commands in this section describe the planned mutation interface. They do
+not work yet.
+
+```sh
+# The implemented plan command is the dry-run boundary.
 docker_maid plan
 
 # Run one authorized cleanup pass without prompts.
@@ -151,9 +184,10 @@ exit codes are:
 
 ## Architecture
 
-The implemented configuration slice uses `clap`, `serde`, `toml`, and
-`humantime`. Planned runtime layers will use `bollard` for the Docker API,
-`tokio` for asynchronous execution, and `ratatui` with `crossterm` for the TUI.
+The implemented configuration and planning slices use `clap`, `serde`, `toml`,
+`humantime`, `regex`, and `globset`. The read-only adapter uses `bollard` and
+`tokio` to query Docker without shelling out. Planned runtime layers will use
+`ratatui` with `crossterm` for the TUI.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor, which rechecks the current

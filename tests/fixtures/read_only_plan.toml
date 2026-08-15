@@ -1,0 +1,4 @@
+[[rules.networks]]
+name = "proof-network"
+select.names = ["^docker-maid-proof-610b0534$"]
+orphan = true

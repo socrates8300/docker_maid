@@ -8,9 +8,14 @@ license = "MIT"
 repository = "https://github.com/socrates8300/docker_maid"
 
 [dependencies]
+bollard = { version = "0.21", default-features = false, features = ["http", "pipe"] }
 clap = { version = "4.5", features = ["derive"] }
+futures-util = "0.3"
+globset = "0.4"
 humantime = "2.3"
+regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread"] }
 toml = "0.9"
 
 [dev-dependencies]
