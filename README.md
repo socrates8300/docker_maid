@@ -6,8 +6,9 @@
 > **Project status: early implementation.** Strict configuration, read-only
 > planning, and one-shot cleanup for containers, images, volumes, networks, and
 > build cache work from source. Typed runtime protection and durable cleanup
-> activity history and daemon mode also work from source. JSON mode and the TUI
-> are not implemented or released yet. Commands in planned sections do not work.
+> activity history, daemon mode, and the versioned JSON/NDJSON machine interface
+> also work from source. The TUI is not implemented or released yet. Commands in
+> planned sections do not work.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
 behind by coding-agent workflows. It targets one Docker host at a time and puts
@@ -43,11 +44,11 @@ There is no `--yes` flag and no direct-delete shortcut in v1.
 
 ## One product, three interfaces
 
-| Interface | Intended user | Planned contract |
+| Interface | Intended user | Contract |
 |---|---|---|
 | `docker_maid tui` | People at a terminal | Dashboard, inventory, plan review, activity, and rules |
 | Table output | People and shell scripts | Readable text with automatic color control |
-| `--format json` | Coding agents and CI | Versioned JSON, NDJSON streams, and machine-readable errors |
+| `--format json` | Coding agents and CI | Available: versioned JSON, NDJSON streams, and machine-readable errors |
 
 All three interfaces use the same inventory, classification, planning, and
 execution core. Frontends contain no policy logic.
@@ -193,7 +194,8 @@ docker_maid daemon --apply --interval 30s
 On macOS and Linux, `SIGHUP` starts an immediate pass with the latest
 configuration. `SIGTERM` and `SIGINT` wait for the current pass to finish, then
 exit successfully. Applied daemon passes use `source = "daemon"` in the durable
-activity journal. Versioned NDJSON daemon output remains planned.
+activity journal. With `--format json`, the daemon emits one NDJSON lifecycle,
+plan, action, summary, or recoverable-error event per line.
 
 ### Planned TUI flow in 60 seconds
 
@@ -242,8 +244,10 @@ The rule emits a warning for every planned and applied pass.
 
 ## Agents and CI
 
-The current table-form `status` and `daemon` commands are available now.
-Versioned JSON and NDJSON streams remain planned for agent workflows:
+Every non-interactive command accepts `--format json`; `--json` is its alias.
+One-shot commands emit one schema-versioned document. Fatal errors leave stdout
+empty and emit one schema-versioned error document on stderr. Exit codes do not
+change between table and JSON formats.
 
 ```sh
 # Inspect config, inventory, dispositions, history, and disk usage.
@@ -256,9 +260,9 @@ docker_maid clean --apply --format json
 docker_maid daemon --apply --format json
 ```
 
-JSON output will never contain ANSI escapes, spinners, or progress bars.
-Fatal JSON-mode errors will use a versioned envelope on stderr. Planned stable
-exit codes are:
+JSON output contains no ANSI escapes, spinners, progress bars, or prompts.
+The version 1 schema is additive-only and documented in
+[docs/schema.md](docs/schema.md). Stable exit codes are:
 
 | Code | Meaning |
 |---|---|
@@ -275,10 +279,10 @@ exit codes are:
 ## Architecture
 
 The implemented configuration, planning, one-shot execution, daemon,
-protection-state, and activity-journal slices use `clap`, `serde`, `toml`,
-`humantime`, `regex`, `globset`, and `fs2`. The Docker adapter uses `bollard`
-and `tokio` without shelling out. Planned runtime layers will use `ratatui` with
-`crossterm` for the TUI.
+protection-state, activity-journal, and machine-interface slices use `clap`,
+`serde`, `serde_json`, `toml`, `humantime`, `regex`, `globset`, and `fs2`. The
+Docker adapter uses `bollard` and `tokio` without shelling out. Planned runtime
+layers will use `ratatui` with `crossterm` for the TUI.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor, which rechecks the current
@@ -291,7 +295,8 @@ delete request.
   dry-run plans, and conservative one-shot cleanup for all five resource types.
 - **M1 — Core engine (implemented from source):** durable protection, activity
   history, and interval-driven daemon execution.
-- **M2 — v0.1 interfaces:** TUI, stable machine schemas, reports, and releases.
+- **M2 — v0.1 interfaces:** stable machine schemas are implemented from source;
+  TUI, reports, and releases remain.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
 
 See the [PRD milestones](PRD.md#10-milestones) for exit criteria and the full

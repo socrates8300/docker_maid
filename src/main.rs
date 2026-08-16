@@ -3,8 +3,10 @@ use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, 
 use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
 use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::collect_inventory;
+use docker_maid::machine;
 use docker_maid::plan::{build_plan_with_protection, Action, Disposition, Plan};
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -27,8 +29,32 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
 
+    /// Select human-readable tables or the stable machine schema.
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Table)]
+    format: OutputFormat,
+
+    /// Alias for --format json.
+    #[arg(long, global = true, conflicts_with = "format")]
+    json: bool,
+
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    fn output_format(&self) -> OutputFormat {
+        if self.json {
+            OutputFormat::Json
+        } else {
+            self.format
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    Table,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -104,57 +130,59 @@ impl From<CliProtectionKind> for ProtectionKind {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = match Cli::try_parse() {
+    let arguments = std::env::args_os().collect::<Vec<_>>();
+    let requested_format = requested_output_format(&arguments);
+    let cli = match Cli::try_parse_from(&arguments) {
         Ok(cli) => cli,
         Err(error) => {
-            let successful = matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            );
-            let _ = error.print();
-            return ExitCode::from(if successful { 0 } else { EXIT_USAGE });
+            if error.kind() == ErrorKind::DisplayVersion && requested_format == OutputFormat::Json {
+                let result = write_json_payload(&machine::version_document());
+                return ExitCode::from(
+                    result.map_or_else(|write_error| output_error_exit_code(&write_error), |()| 0),
+                );
+            }
+            if error.kind() == ErrorKind::DisplayHelp {
+                let _ = error.print();
+                return ExitCode::SUCCESS;
+            }
+            if requested_format == OutputFormat::Json {
+                write_error_diagnostic(OutputFormat::Json, "usage", &error.to_string());
+            } else {
+                let _ = error.print();
+            }
+            return ExitCode::from(EXIT_USAGE);
         }
     };
+    let format = cli.output_format();
 
-    match run(cli).await {
+    match run(cli, format).await {
         Ok(RunOutcome::Success) => ExitCode::SUCCESS,
         Ok(RunOutcome::PendingRemovals) => ExitCode::from(EXIT_PENDING),
-        Ok(RunOutcome::PartialFailure) => ExitCode::from(EXIT_PARTIAL),
+        Ok(RunOutcome::PartialFailure) => {
+            if format == OutputFormat::Json {
+                write_error_diagnostic(
+                    format,
+                    "partial_failure",
+                    "one or more planned removals were skipped or failed",
+                );
+            }
+            ExitCode::from(EXIT_PARTIAL)
+        }
         Err(RunError::Output(error)) => {
             let code = output_error_exit_code(&error);
             if code != 0 {
-                write_diagnostic(&format!("error: cannot write stdout: {error}"));
+                write_error_diagnostic(
+                    format,
+                    "internal",
+                    &format!("cannot write stdout: {error}"),
+                );
             }
             ExitCode::from(code)
         }
-        Err(RunError::Config(error)) => {
-            write_diagnostic(&format!("error: {error}"));
-            ExitCode::from(EXIT_CONFIG)
-        }
-        Err(RunError::Docker(error)) => {
-            write_diagnostic(&format!("error: {error}"));
-            ExitCode::from(EXIT_DOCKER)
-        }
-        Err(RunError::Execution(error)) => {
-            let code = if matches!(error, docker_maid::executor::ExecutionError::State(_)) {
-                EXIT_STATE
-            } else {
-                EXIT_DOCKER
-            };
-            write_diagnostic(&format!("error: {error}"));
+        Err(error) => {
+            let (code, kind) = run_error_classification(&error);
+            write_error_diagnostic(format, kind, &run_error_message(&error));
             ExitCode::from(code)
-        }
-        Err(RunError::State(error)) => {
-            write_diagnostic(&format!("error: {error}"));
-            ExitCode::from(EXIT_STATE)
-        }
-        Err(RunError::Usage(error)) => {
-            write_diagnostic(&format!("error: {error}"));
-            ExitCode::from(EXIT_USAGE)
-        }
-        Err(RunError::Internal(error)) => {
-            write_diagnostic(&format!("error: {error}"));
-            ExitCode::from(EXIT_INTERNAL)
         }
     }
 }
@@ -213,23 +241,30 @@ impl From<docker_maid::activity::ActivityError> for RunError {
     }
 }
 
-async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
+async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
     match cli.command {
-        Command::Plan => run_cleanup(cli.config.as_deref(), false, false).await,
-        Command::Clean { apply } => run_cleanup(cli.config.as_deref(), true, apply).await,
+        Command::Plan => run_cleanup(cli.config.as_deref(), false, false, format).await,
+        Command::Clean { apply } => run_cleanup(cli.config.as_deref(), true, apply, format).await,
         Command::Daemon { apply, interval } => {
-            run_daemon(cli.config.as_deref(), apply, interval.as_deref()).await
+            run_daemon(cli.config.as_deref(), apply, interval.as_deref(), format).await
         }
-        Command::Status => run_status(cli.config.as_deref()).await,
+        Command::Status => run_status(cli.config.as_deref(), format).await,
         Command::Protect { kind, values } => {
             let store = ProtectionStore::from_env()?;
             let kind = ProtectionKind::from(kind);
             let added = store.add(kind, &values)?;
-            let message = format!(
-                "Protection state updated: added {added}, total {}.\n",
-                store.snapshot()?.entries.len()
-            );
-            write_payload(message.as_bytes())?;
+            let total = store.snapshot()?.entries.len();
+            if format == OutputFormat::Json {
+                write_json_payload(&machine::protection_document(
+                    "protect",
+                    &kind.to_string(),
+                    added,
+                    total,
+                ))?;
+            } else {
+                let message = format!("Protection state updated: added {added}, total {total}.\n");
+                write_payload(message.as_bytes())?;
+            }
             Ok(RunOutcome::Success)
         }
         Command::Unprotect { kind, values } => {
@@ -237,17 +272,31 @@ async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
             refuse_config_sourced_unprotect(cli.config.as_deref(), kind, &values)?;
             let store = ProtectionStore::from_env()?;
             let removed = store.remove(kind, &values)?;
-            let message = format!(
-                "Protection state updated: removed {removed}, total {}.\n",
-                store.snapshot()?.entries.len()
-            );
-            write_payload(message.as_bytes())?;
+            let total = store.snapshot()?.entries.len();
+            if format == OutputFormat::Json {
+                write_json_payload(&machine::protection_document(
+                    "unprotect",
+                    &kind.to_string(),
+                    removed,
+                    total,
+                ))?;
+            } else {
+                let message =
+                    format!("Protection state updated: removed {removed}, total {total}.\n");
+                write_payload(message.as_bytes())?;
+            }
             Ok(RunOutcome::Success)
         }
         Command::Config {
             command: ConfigCommand::Default,
         } => {
-            write_payload(DEFAULT_CONFIG.as_bytes())?;
+            if format == OutputFormat::Json {
+                let config = Config::parse(DEFAULT_CONFIG, Path::new("<default>"))?;
+                config.validate()?;
+                write_json_payload(&machine::config_document("config.default", None, &config))?;
+            } else {
+                write_payload(DEFAULT_CONFIG.as_bytes())?;
+            }
             Ok(RunOutcome::Success)
         }
         Command::Config { command } => {
@@ -255,12 +304,29 @@ async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
 
             match command {
                 ConfigCommand::Check => {
-                    let message = format!("configuration valid: {}\n", display_path(&loaded.path));
-                    write_payload(message.as_bytes())?;
+                    if format == OutputFormat::Json {
+                        write_json_payload(&machine::config_document(
+                            "config.check",
+                            Some(&display_path(&loaded.path)),
+                            &loaded.config,
+                        ))?;
+                    } else {
+                        let message =
+                            format!("configuration valid: {}\n", display_path(&loaded.path));
+                        write_payload(message.as_bytes())?;
+                    }
                 }
                 ConfigCommand::Print => {
-                    let normalized = loaded.config.to_normalized_toml()?;
-                    write_payload(normalized.as_bytes())?;
+                    if format == OutputFormat::Json {
+                        write_json_payload(&machine::config_document(
+                            "config.print",
+                            Some(&display_path(&loaded.path)),
+                            &loaded.config,
+                        ))?;
+                    } else {
+                        let normalized = loaded.config.to_normalized_toml()?;
+                        write_payload(normalized.as_bytes())?;
+                    }
                 }
                 ConfigCommand::Default => unreachable!("handled without loading configuration"),
             }
@@ -273,14 +339,25 @@ async fn run_cleanup(
     explicit_config: Option<&Path>,
     clean_command: bool,
     apply: bool,
+    format: OutputFormat,
 ) -> Result<RunOutcome, RunError> {
-    let prepared = prepare_cleanup(explicit_config).await?;
+    let prepared = prepare_cleanup(explicit_config, format).await?;
     let result = if clean_command && apply {
-        apply_cleanup(&prepared, "clean").await?
+        apply_cleanup(&prepared, "clean", format).await?
     } else {
         dry_run_cleanup(&prepared)
     };
-    write_payload(result.output.as_bytes())?;
+    if format == OutputFormat::Json {
+        let command = if clean_command { "clean" } else { "plan" };
+        write_json_payload(&machine::plan_document(
+            command,
+            clean_command && apply,
+            &prepared.plan,
+            result.report.as_ref(),
+        ))?;
+    } else {
+        write_payload(result.output.as_bytes())?;
+    }
     Ok(result.outcome)
 }
 
@@ -294,13 +371,19 @@ struct PreparedCleanup {
 struct CleanupPassResult {
     output: String,
     outcome: RunOutcome,
+    report: Option<ExecutionReport>,
 }
 
-async fn prepare_cleanup(explicit_config: Option<&Path>) -> Result<PreparedCleanup, RunError> {
+async fn prepare_cleanup(
+    explicit_config: Option<&Path>,
+    format: OutputFormat,
+) -> Result<PreparedCleanup, RunError> {
     let loaded = load_selected_config(explicit_config)?;
     if loaded.config.rules.build_cache.is_some() {
-        write_diagnostic(
-            "warning: build-cache policy is authorized-unscoped because Docker cache records have no ownership metadata",
+        write_warning_diagnostic(
+            format,
+            "authorized_unscoped",
+            "build-cache policy is authorized-unscoped because Docker cache records have no ownership metadata",
         );
     }
     let state_paths = StatePaths::from_env()?;
@@ -331,12 +414,14 @@ fn dry_run_cleanup(prepared: &PreparedCleanup) -> CleanupPassResult {
         } else {
             RunOutcome::Success
         },
+        report: None,
     }
 }
 
 async fn apply_cleanup(
     prepared: &PreparedCleanup,
     source: &str,
+    format: OutputFormat,
 ) -> Result<CleanupPassResult, RunError> {
     let authorized_unscoped = prepared
         .plan
@@ -348,9 +433,11 @@ async fn apply_cleanup(
         })
         .count();
     if authorized_unscoped != 0 {
-        write_diagnostic(&format!(
-            "warning: applying {authorized_unscoped} authorized-unscoped removal(s)"
-        ));
+        write_warning_diagnostic(
+            format,
+            "authorized_unscoped_apply",
+            &format!("applying {authorized_unscoped} authorized-unscoped removal(s)"),
+        );
     }
 
     let journal = ActivityJournal::new(prepared.state_paths.clone());
@@ -388,6 +475,7 @@ async fn apply_cleanup(
         } else {
             RunOutcome::Success
         },
+        report: Some(report),
     })
 }
 
@@ -395,6 +483,7 @@ async fn run_daemon(
     explicit_config: Option<&Path>,
     apply: bool,
     interval_override: Option<&str>,
+    format: OutputFormat,
 ) -> Result<RunOutcome, RunError> {
     let override_interval = interval_override
         .map(|source| daemon_interval(&Config::default(), Some(source)))
@@ -405,45 +494,125 @@ async fn run_daemon(
         None => daemon_interval(&initial.config, None)?,
     };
     let mut signals = DaemonSignals::new()?;
-    let mode = if apply { "apply" } else { "dry-run" };
-    write_diagnostic(&format!(
-        "daemon: started in {mode} mode; interval {}",
-        humantime::format_duration(interval)
-    ));
+    announce_daemon_start(format, apply, interval)?;
     let mut trigger = "startup";
     let mut pass_number = 0u64;
 
     loop {
         pass_number = pass_number.saturating_add(1);
+        if format == OutputFormat::Json {
+            write_json_payload(&machine::daemon_pass_started_event(
+                pass_number,
+                trigger,
+                apply,
+                epoch_seconds()?,
+            ))?;
+        }
         match run_daemon_pass(
             explicit_config,
             apply,
             interval_override,
             pass_number,
             trigger,
+            format,
         )
         .await
         {
             Ok(next_interval) => interval = next_interval,
             Err(error @ RunError::Output(_)) => return Err(error),
-            Err(error) => write_diagnostic(&format!(
-                "error: daemon pass {pass_number} failed: {}",
-                run_error_message(&error)
-            )),
+            Err(error) => announce_daemon_pass_failure(format, pass_number, &error)?,
         }
 
         match signals.wait(interval).await {
             DaemonWake::Interval => trigger = "interval",
             DaemonWake::Reload => {
-                write_diagnostic("daemon: SIGHUP received; reloading configuration");
+                announce_daemon_reload(format)?;
                 trigger = "SIGHUP";
             }
             DaemonWake::Terminate => {
-                write_diagnostic("daemon: shutdown requested; current pass complete");
+                announce_daemon_stop(format)?;
                 return Ok(RunOutcome::Success);
             }
         }
     }
+}
+
+fn announce_daemon_start(
+    format: OutputFormat,
+    apply: bool,
+    interval: Duration,
+) -> Result<(), RunError> {
+    let mode = if apply { "apply" } else { "dry-run" };
+    if format == OutputFormat::Json {
+        write_json_payload(&machine::daemon_event(
+            "daemon_started",
+            epoch_seconds()?,
+            serde_json::json!({
+                "mode": mode,
+                "interval_seconds": interval.as_secs_f64(),
+            }),
+        ))?;
+    } else {
+        write_diagnostic(&format!(
+            "daemon: started in {mode} mode; interval {}",
+            humantime::format_duration(interval)
+        ));
+    }
+    Ok(())
+}
+
+fn announce_daemon_pass_failure(
+    format: OutputFormat,
+    pass_number: u64,
+    error: &RunError,
+) -> Result<(), RunError> {
+    if format == OutputFormat::Json {
+        let (_, kind) = run_error_classification(error);
+        write_json_payload(&machine::daemon_event(
+            "pass_error",
+            epoch_seconds()?,
+            serde_json::json!({
+                "pass_number": pass_number,
+                "error": {
+                    "kind": kind,
+                    "message": run_error_message(error),
+                    "details": [],
+                },
+            }),
+        ))?;
+    } else {
+        write_diagnostic(&format!(
+            "error: daemon pass {pass_number} failed: {}",
+            run_error_message(error)
+        ));
+    }
+    Ok(())
+}
+
+fn announce_daemon_reload(format: OutputFormat) -> Result<(), RunError> {
+    if format == OutputFormat::Json {
+        write_json_payload(&machine::daemon_event(
+            "configuration_reload_requested",
+            epoch_seconds()?,
+            serde_json::json!({"signal": "SIGHUP"}),
+        ))?;
+    } else {
+        write_diagnostic("daemon: SIGHUP received; reloading configuration");
+    }
+    Ok(())
+}
+
+fn announce_daemon_stop(format: OutputFormat) -> Result<(), RunError> {
+    if format == OutputFormat::Json {
+        write_json_payload(&machine::daemon_event(
+            "daemon_stopped",
+            epoch_seconds()?,
+            serde_json::json!({"reason": "shutdown_requested"}),
+        ))?;
+    } else {
+        write_diagnostic("daemon: shutdown requested; current pass complete");
+    }
+    Ok(())
 }
 
 async fn run_daemon_pass(
@@ -452,20 +621,33 @@ async fn run_daemon_pass(
     interval_override: Option<&str>,
     pass_number: u64,
     trigger: &str,
+    format: OutputFormat,
 ) -> Result<Duration, RunError> {
-    let prepared = prepare_cleanup(explicit_config).await?;
+    let prepared = prepare_cleanup(explicit_config, format).await?;
     let next_interval = daemon_interval(&prepared.loaded.config, interval_override)?;
     let result = if apply {
-        apply_cleanup(&prepared, "daemon").await?
+        apply_cleanup(&prepared, "daemon", format).await?
     } else {
         dry_run_cleanup(&prepared)
     };
-    let mode = if apply { "apply" } else { "dry-run" };
-    let output = format!(
-        "Daemon pass {pass_number} ({trigger}, {mode})\n{}",
-        result.output
-    );
-    write_payload(output.as_bytes())?;
+    if format == OutputFormat::Json {
+        for event in machine::daemon_pass_result_events(
+            pass_number,
+            apply,
+            &prepared.plan,
+            result.report.as_ref(),
+            epoch_seconds()?,
+        ) {
+            write_json_payload(&event)?;
+        }
+    } else {
+        let mode = if apply { "apply" } else { "dry-run" };
+        let output = format!(
+            "Daemon pass {pass_number} ({trigger}, {mode})\n{}",
+            result.output
+        );
+        write_payload(output.as_bytes())?;
+    }
     Ok(next_interval)
 }
 
@@ -503,6 +685,17 @@ fn run_error_message(error: &RunError) -> String {
             error.clone()
         }
         RunError::Output(error) => format!("cannot write stdout: {error}"),
+    }
+}
+
+fn run_error_classification(error: &RunError) -> (u8, &'static str) {
+    match error {
+        RunError::Config(_) => (EXIT_CONFIG, "config_invalid"),
+        RunError::Execution(docker_maid::executor::ExecutionError::State(_))
+        | RunError::State(_) => (EXIT_STATE, "state_io"),
+        RunError::Docker(_) | RunError::Execution(_) => (EXIT_DOCKER, "docker_unreachable"),
+        RunError::Usage(_) => (EXIT_USAGE, "usage"),
+        RunError::Internal(_) | RunError::Output(_) => (EXIT_INTERNAL, "internal"),
     }
 }
 
@@ -564,7 +757,10 @@ impl DaemonSignals {
     }
 }
 
-async fn run_status(explicit_config: Option<&Path>) -> Result<RunOutcome, RunError> {
+async fn run_status(
+    explicit_config: Option<&Path>,
+    format: OutputFormat,
+) -> Result<RunOutcome, RunError> {
     let loaded = load_selected_config(explicit_config)?;
     let paths = StatePaths::from_env()?;
     let protection = ProtectionStore::new(paths.clone()).snapshot()?;
@@ -572,9 +768,46 @@ async fn run_status(explicit_config: Option<&Path>) -> Result<RunOutcome, RunErr
     let plan = build_plan_with_protection(&loaded.config, inventory, epoch_seconds()?, &protection)
         .map_err(|error| RunError::Internal(format!("cannot build status: {error}")))?;
     let last_pass = ActivityJournal::new(paths).last_completed_pass()?;
-    let output = render_status(&plan, protection.entries.len(), last_pass.as_ref());
-    write_payload(output.as_bytes())?;
+    for rule in regressed_rules(&plan, last_pass.as_ref()) {
+        write_warning_diagnostic(
+            format,
+            "rule_health_regressed",
+            &format!("rule {rule:?} previously matched resources but now matches none"),
+        );
+    }
+    if format == OutputFormat::Json {
+        write_json_payload(&machine::status_document(
+            &display_path(&loaded.path),
+            &stable_config_hash(&loaded.source),
+            &loaded.config,
+            &plan,
+            protection.entries.len(),
+            last_pass.as_ref(),
+        ))?;
+    } else {
+        let output = render_status(&plan, protection.entries.len(), last_pass.as_ref());
+        write_payload(output.as_bytes())?;
+    }
     Ok(RunOutcome::Success)
+}
+
+fn regressed_rules(plan: &Plan, last: Option<&CompletedPass>) -> Vec<String> {
+    let Some(last) = last else {
+        return Vec::new();
+    };
+    last.rule_match_counts
+        .iter()
+        .filter(|(rule, previous)| {
+            **previous != 0
+                && !plan.decisions.iter().any(|decision| {
+                    decision
+                        .matched_rule
+                        .as_ref()
+                        .is_some_and(|name| name == *rule)
+                })
+        })
+        .map(|(rule, _)| rule.clone())
+        .collect()
 }
 
 fn render_status(
@@ -730,10 +963,41 @@ fn write_payload(payload: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
+fn write_json_payload(value: &serde_json::Value) -> io::Result<()> {
+    let payload = machine::to_line(value).map_err(io::Error::other)?;
+    write_payload(&payload)
+}
+
 fn write_diagnostic(message: &str) {
     let stderr = io::stderr();
     let mut writer = stderr.lock();
     let _ = writeln!(writer, "{message}");
+}
+
+fn write_error_diagnostic(format: OutputFormat, kind: &str, message: &str) {
+    if format == OutputFormat::Json {
+        write_json_diagnostic(&machine::error_document(kind, message.trim_end()));
+    } else {
+        write_diagnostic(&format!("error: {}", message.trim_end()));
+    }
+}
+
+fn write_warning_diagnostic(format: OutputFormat, kind: &str, message: &str) {
+    if format == OutputFormat::Json {
+        write_json_diagnostic(&machine::warning_document(kind, message));
+    } else {
+        write_diagnostic(&format!("warning: {message}"));
+    }
+}
+
+fn write_json_diagnostic(value: &serde_json::Value) {
+    let Ok(payload) = machine::to_line(value) else {
+        return;
+    };
+    let stderr = io::stderr();
+    let mut writer = stderr.lock();
+    let _ = writer.write_all(&payload);
+    let _ = writer.flush();
 }
 
 fn output_error_exit_code(error: &io::Error) -> u8 {
@@ -742,6 +1006,29 @@ fn output_error_exit_code(error: &io::Error) -> u8 {
     } else {
         EXIT_INTERNAL
     }
+}
+
+fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
+    let mut index = 1usize;
+    while index < arguments.len() {
+        let Some(argument) = arguments[index].to_str() else {
+            index = index.saturating_add(1);
+            continue;
+        };
+        if argument == "--json" || argument == "--format=json" {
+            return OutputFormat::Json;
+        }
+        if argument == "--format"
+            && arguments
+                .get(index.saturating_add(1))
+                .and_then(|value| value.to_str())
+                == Some("json")
+        {
+            return OutputFormat::Json;
+        }
+        index = index.saturating_add(1);
+    }
+    OutputFormat::Table
 }
 
 fn config_home() -> Option<PathBuf> {

@@ -1,0 +1,6 @@
+{"event":"daemon_started","interval_seconds":300.0,"mode":"apply","schema_version":1,"timestamp":1}
+{"event":"pass_started","mode":"apply","pass_number":1,"schema_version":1,"timestamp":1,"trigger":"startup"}
+{"event":"plan","inventory":{"by_disposition":{"owned":1},"by_resource_kind":{"network":1},"pending_removals":1,"total":1},"items":[{"action":"remove","age_seconds":60,"disposition":"owned","id":"fixture-network-id","matched_rule":"fixture-networks","name":"fixture-network","reason":"matched orphan network rule","resource_kind":"network","size_bytes":null,"state":"available"}],"pass_number":1,"pending_removals":1,"schema_version":1,"timestamp":1}
+{"action":"remove","detail":"removed network","event":"action","matched_rule":"fixture-networks","pass_number":1,"resource_id":"fixture-network-id","resource_kind":"network","resource_name":"fixture-network","result":"removed","schema_version":1,"timestamp":1}
+{"event":"pass_summary","mode":"apply","pass_number":1,"pending_removals":1,"result":{"failed":0,"outcomes":[{"detail":"removed network","id":"fixture-network-id","matched_rule":"fixture-networks","name":"fixture-network","resource_kind":"network","status":"removed"}],"removed":1,"skipped":0},"schema_version":1,"timestamp":1}
+{"event":"daemon_stopped","reason":"shutdown_requested","schema_version":1,"timestamp":2}
