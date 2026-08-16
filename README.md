@@ -71,6 +71,18 @@ ownership from arbitrary names. It discovers:
 - name prefixes that the operator explicitly enters;
 - build cache as a separate authorized-unscoped choice.
 
+Human views show agent-label families first, Compose families second, explicit
+name prefixes next, and build cache last. Machine JSON keeps the canonical
+candidate vector unchanged so candidate IDs and TUI selection indexes remain
+stable.
+
+Compose candidates carry a warning computed from the rules that the proposal
+will generate. A running or referenced stack can correctly preview zero
+removals. The warning also states what those same rules can remove after
+`docker compose down` or another detach. In the current policy engine, an old
+volume can become eligible as soon as it detaches because `orphan_for` still
+uses resource creation age; always inspect the new plan before applying it.
+
 Unselected and unlabeled objects remain unowned. The three profiles provide
 editable starting values:
 

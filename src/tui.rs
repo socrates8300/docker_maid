@@ -10,8 +10,9 @@ use crossterm::terminal::{
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
 use docker_maid::config::{Config, ConfigError, LoadedConfig};
 use docker_maid::configurator::{
-    add_name_prefix_candidate, configuration_target_path, propose_configuration, survey_inventory,
-    write_proposal, ConfigProposal, ConfiguratorError, ConfiguratorSurvey, PolicyProfile,
+    add_name_prefix_candidate, candidate_display_indices, configuration_target_path,
+    propose_configuration, refresh_candidate_warnings, survey_inventory, write_proposal,
+    CandidateSelector, ConfigProposal, ConfiguratorError, ConfiguratorSurvey, PolicyProfile,
     PolicySettings, ProposalRequest, MANAGED_ID_PREFIX,
 };
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
@@ -170,7 +171,7 @@ impl App {
         let protection = protection_store.snapshot()?;
         let plan_created_at = epoch_seconds()?;
         let config_hash = stable_config_hash(&loaded.source);
-        let (plan, survey, docker_error) = match collect_inventory_for_configuration().await {
+        let (plan, mut survey, docker_error) = match collect_inventory_for_configuration().await {
             Ok(inventory) => (
                 build_plan_with_protection(
                     &loaded.config,
@@ -199,6 +200,9 @@ impl App {
         } else {
             PlanValidity::Stale
         };
+        let configure_policy = PolicyProfile::Workstation.settings();
+        refresh_candidate_warnings(&mut survey, &configure_policy);
+        let configure_row = first_configure_row(&survey);
         let status = docker_error.map_or_else(
             || startup_status(&loaded, built_in_config, &plan),
             |error| format!("Docker unavailable: {error} • fix the endpoint and press r"),
@@ -232,9 +236,9 @@ impl App {
             rules_scroll: 0,
             survey,
             configure_selected,
-            configure_row: 0,
+            configure_row,
             configure_profile: PolicyProfile::Workstation,
-            configure_policy: PolicyProfile::Workstation.settings(),
+            configure_policy,
             policy_field: 0,
             config_proposal: None,
             prefix_input: String::new(),
@@ -254,6 +258,9 @@ impl App {
     }
 
     async fn refresh(&mut self) -> Result<(), RunError> {
+        let selected_candidate_id = self
+            .selected_candidate()
+            .map(|candidate| candidate.id.clone());
         let (loaded, built_in_config) = load_tui_config(self.explicit_config.as_deref())?;
         let protection = self.protection_store.snapshot()?;
         let inventory = collect_inventory_for_configuration().await?;
@@ -276,6 +283,7 @@ impl App {
         self.plan_validity = PlanValidity::Valid;
         self.history = history;
         self.survey = survey_inventory(&inventory);
+        refresh_candidate_warnings(&mut self.survey, &self.configure_policy);
         self.configure_selected.retain(|id| {
             self.survey
                 .candidates
@@ -286,9 +294,15 @@ impl App {
             self.configure_selected = managed_candidate_ids(&self.loaded.config, &self.survey);
         }
         self.config_proposal = None;
-        self.configure_row = self
-            .configure_row
-            .min(self.survey.candidates.len().saturating_sub(1));
+        self.configure_row = selected_candidate_id
+            .as_deref()
+            .and_then(|id| {
+                self.survey
+                    .candidates
+                    .iter()
+                    .position(|candidate| candidate.id == id)
+            })
+            .unwrap_or_else(|| first_configure_row(&self.survey));
         self.clamp_selection();
         self.status = format!(
             "Refreshed: {} resources, {} pending removals",
@@ -368,14 +382,7 @@ impl App {
                 self.activity_scroll = move_scroll(self.activity_scroll, delta);
             }
             View::Configure => {
-                if self.survey.candidates.is_empty() {
-                    self.configure_row = 0;
-                } else {
-                    self.configure_row = self
-                        .configure_row
-                        .saturating_add_signed(delta)
-                        .min(self.survey.candidates.len() - 1);
-                }
+                self.configure_row = move_configure_row(&self.survey, self.configure_row, delta);
             }
             View::Dashboard => {}
         }
@@ -417,6 +424,7 @@ impl App {
             .min(PolicyProfile::ALL.len() - 1);
         self.configure_profile = PolicyProfile::ALL[next];
         self.configure_policy = self.configure_profile.settings();
+        refresh_candidate_warnings(&mut self.survey, &self.configure_policy);
         self.config_proposal = None;
         self.status = format!("Policy profile: {}", self.configure_profile.title());
     }
@@ -448,6 +456,7 @@ impl App {
         set_policy_field(field, &mut next_policy, self.prefix_input.trim())?;
         next_policy.validate()?;
         self.configure_policy = next_policy;
+        refresh_candidate_warnings(&mut self.survey, &self.configure_policy);
         self.config_proposal = None;
         self.editor = Editor::None;
         self.status = format!(
@@ -1660,11 +1669,11 @@ fn render_configure_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let rows = app
-        .survey
-        .candidates
+    let display_indices = candidate_display_indices(&app.survey.candidates);
+    let rows = display_indices
         .iter()
-        .map(|candidate| {
+        .map(|index| {
+            let candidate = &app.survey.candidates[*index];
             let selected = if app.configure_selected.contains(&candidate.id) {
                 "[x]"
             } else {
@@ -1704,7 +1713,11 @@ fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
     )
     .row_highlight_style(Style::default().bg(Color::DarkGray))
     .highlight_symbol("▶ ");
-    let mut table_state = TableState::default().with_selected(Some(app.configure_row));
+    let selected_display_row = display_indices
+        .iter()
+        .position(|index| *index == app.configure_row)
+        .unwrap_or(0);
+    let mut table_state = TableState::default().with_selected(Some(selected_display_row));
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
@@ -1739,7 +1752,9 @@ fn configure_detail(app: &App) -> String {
         );
         if let Some(warning) = &candidate.warning {
             let _ = writeln!(detail, "\n{warning}");
-            detail.push_str("Enable only when daemon-wide cache cleanup is intentional.\n");
+            if matches!(candidate.selector, CandidateSelector::BuildCache) {
+                detail.push_str("Enable only when daemon-wide cache cleanup is intentional.\n");
+            }
         }
         detail.push_str("\nObserved objects:\n");
         for resource in candidate.resources.iter().take(12) {
@@ -2246,6 +2261,32 @@ fn protection_kind(kind: ResourceKind) -> Option<ProtectionKind> {
     }
 }
 
+fn first_configure_row(survey: &ConfiguratorSurvey) -> usize {
+    candidate_display_indices(&survey.candidates)
+        .first()
+        .copied()
+        .unwrap_or(0)
+}
+
+fn move_configure_row(
+    survey: &ConfiguratorSurvey,
+    current_canonical_row: usize,
+    delta: isize,
+) -> usize {
+    let display_indices = candidate_display_indices(&survey.candidates);
+    if display_indices.is_empty() {
+        return 0;
+    }
+    let current_display_row = display_indices
+        .iter()
+        .position(|index| *index == current_canonical_row)
+        .unwrap_or(0);
+    let next_display_row = current_display_row
+        .saturating_add_signed(delta)
+        .min(display_indices.len() - 1);
+    display_indices[next_display_row]
+}
+
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     let mut wanted = needle.chars().flat_map(char::to_lowercase);
     let mut current = wanted.next();
@@ -2448,6 +2489,35 @@ mod tests {
         );
         assert_eq!(parse_byte_budget("500 MB").expect("budget"), 500_000_000);
         assert!(parse_byte_budget("many").is_err());
+    }
+
+    #[test]
+    fn configure_navigation_uses_display_order_but_stores_canonical_indexes() {
+        let agent = sample_decision().resource;
+        let mut compose = agent.clone();
+        compose.id = "compose".to_owned();
+        compose.name = "project-web".to_owned();
+        compose.search_names = vec![compose.name.clone()];
+        compose.labels = BTreeMap::from([(
+            "com.docker.compose.project".to_owned(),
+            "project".to_owned(),
+        )]);
+        let mut cache = agent.clone();
+        cache.kind = ResourceKind::BuildCache;
+        cache.id = "cache".to_owned();
+        cache.name = "cache".to_owned();
+        cache.search_names = vec![cache.name.clone()];
+        cache.labels.clear();
+        cache.state = ResourceState::Available;
+        let survey = survey_inventory(&[compose, agent, cache]);
+
+        assert!(survey.candidates[0].id.starts_with("agent-label/"));
+        assert_eq!(survey.candidates[1].id, "build-cache");
+        assert!(survey.candidates[2].id.starts_with("compose/"));
+        assert_eq!(first_configure_row(&survey), 0);
+        assert_eq!(move_configure_row(&survey, 0, 1), 2);
+        assert_eq!(move_configure_row(&survey, 2, 1), 1);
+        assert_eq!(move_configure_row(&survey, 1, -1), 2);
     }
 
     #[test]

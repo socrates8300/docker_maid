@@ -253,6 +253,27 @@ pub struct ConfiguratorSurvey {
     pub summary: SurveySummary,
 }
 
+/// Return canonical candidate indexes in their human-facing display order.
+///
+/// The survey vector is part of the deterministic machine document. Callers
+/// must render through this index map instead of reordering that vector.
+#[must_use]
+pub fn candidate_display_indices(candidates: &[CandidateFamily]) -> Vec<usize> {
+    let mut indices = (0..candidates.len()).collect::<Vec<_>>();
+    indices.sort_by_key(|index| (candidate_display_rank(&candidates[*index]), *index));
+    indices
+}
+
+/// Recompute policy-specific warnings without changing candidate identity or
+/// canonical order.
+pub fn refresh_candidate_warnings(survey: &mut ConfiguratorSurvey, policy: &PolicySettings) {
+    for candidate in &mut survey.candidates {
+        if is_compose_candidate(candidate) {
+            candidate.warning = Some(compose_future_cleanup_warning(candidate, policy));
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProposalPreview {
@@ -372,7 +393,9 @@ pub fn survey_inventory(inventory: &[InventoryItem]) -> ConfiguratorSurvey {
         }
     }
 
-    finish_survey(inventory, groups)
+    let mut survey = finish_survey(inventory, groups);
+    refresh_candidate_warnings(&mut survey, &PolicyProfile::Workstation.settings());
+    survey
 }
 
 /// Add an operator-chosen name prefix to an existing survey.
@@ -526,7 +549,13 @@ pub fn propose_configuration(
     )?;
     let warnings = selected
         .iter()
-        .filter_map(|candidate| candidate.warning.clone())
+        .filter_map(|candidate| {
+            if is_compose_candidate(candidate) {
+                Some(compose_future_cleanup_warning(candidate, &policy))
+            } else {
+                candidate.warning.clone()
+            }
+        })
         .collect::<Vec<_>>();
     let inventory_signature = inventory_signature(inventory);
     let mut sorted_candidate_ids = selected_ids.into_iter().collect::<Vec<_>>();
@@ -825,6 +854,66 @@ fn is_agent_label(key: &str) -> bool {
         || key == "dev.docker-maid.managed"
 }
 
+fn candidate_display_rank(candidate: &CandidateFamily) -> u8 {
+    match &candidate.selector {
+        CandidateSelector::ExactLabel { key, .. } if key == "com.docker.compose.project" => 1,
+        CandidateSelector::ExactLabel { .. } => 0,
+        CandidateSelector::NamePrefix { .. } => 2,
+        CandidateSelector::BuildCache => 3,
+    }
+}
+
+fn is_compose_candidate(candidate: &CandidateFamily) -> bool {
+    matches!(
+        &candidate.selector,
+        CandidateSelector::ExactLabel { key, .. } if key == "com.docker.compose.project"
+    )
+}
+
+fn compose_future_cleanup_warning(candidate: &CandidateFamily, policy: &PolicySettings) -> String {
+    let mut rules = Rules::default();
+    if append_candidate_rules(&mut rules, candidate, policy).is_err() {
+        return "WARNING: This Compose family has an invalid generated rule shape; do not write it"
+            .to_owned();
+    }
+    sort_rules(&mut rules);
+
+    let mut effects = Vec::new();
+    for rule in &rules.containers {
+        if let Some(ttl) = &rule.stopped_ttl {
+            effects.push(format!("stopped containers become eligible after {ttl}"));
+        }
+    }
+    for rule in &rules.images {
+        if let Some(ttl) = &rule.unused_for {
+            effects.push(format!(
+                "unreferenced images become eligible when their resource age exceeds {ttl}"
+            ));
+        }
+    }
+    for rule in &rules.volumes {
+        if let Some(ttl) = &rule.orphan_for {
+            effects.push(format!(
+                "detached volumes become eligible immediately when their resource age already exceeds {ttl}"
+            ));
+        }
+    }
+    for rule in &rules.networks {
+        if rule.orphan {
+            effects.push("empty networks become eligible immediately".to_owned());
+        }
+    }
+
+    let effect_text = if effects.is_empty() {
+        "no cleanup rule is generated for the currently observed resource kinds".to_owned()
+    } else {
+        effects.join("; ")
+    };
+    format!(
+        "WARNING: Running and referenced Compose resources stay, so this stack can preview zero removals now. After `docker compose down` or another detach, the generated rules apply: {effect_text}. Preview the plan again before applying."
+    )
+}
+
 fn generated_rules(
     manual: &Config,
     candidates: &[&CandidateFamily],
@@ -847,40 +936,55 @@ fn generated_rules(
                     allow_unscoped: true,
                 });
             }
-            CandidateSelector::ExactLabel { key, value } => {
-                let selector = Selectors {
-                    labels: vec![escape_glob(&format!("{key}={value}"))],
-                    ..Selectors::default()
-                };
-                let kinds = candidate
-                    .resources
-                    .iter()
-                    .filter_map(|resource| parse_resource_kind(&resource.resource_kind))
-                    .collect::<BTreeSet<_>>();
-                for kind in kinds {
-                    push_managed_rule(&mut rules, candidate, kind, selector.clone(), policy);
-                }
-            }
-            CandidateSelector::NamePrefix {
-                resource_kind,
-                prefix,
-            } => {
-                let kind = parse_resource_kind(resource_kind).ok_or_else(|| {
-                    ConfiguratorError::Invalid(format!(
-                        "candidate {} has unknown resource kind {resource_kind:?}",
-                        candidate.id
-                    ))
-                })?;
-                let selector = Selectors {
-                    names: vec![format!("^{}", regex::escape(prefix))],
-                    ..Selectors::default()
-                };
-                push_managed_rule(&mut rules, candidate, kind, selector, policy);
+            CandidateSelector::ExactLabel { .. } | CandidateSelector::NamePrefix { .. } => {
+                append_candidate_rules(&mut rules, candidate, policy)?;
             }
         }
     }
     sort_rules(&mut rules);
     Ok(rules)
+}
+
+fn append_candidate_rules(
+    rules: &mut Rules,
+    candidate: &CandidateFamily,
+    policy: &PolicySettings,
+) -> Result<(), ConfiguratorError> {
+    match &candidate.selector {
+        CandidateSelector::ExactLabel { key, value } => {
+            let selector = Selectors {
+                labels: vec![escape_glob(&format!("{key}={value}"))],
+                ..Selectors::default()
+            };
+            let kinds = candidate
+                .resources
+                .iter()
+                .filter_map(|resource| parse_resource_kind(&resource.resource_kind))
+                .collect::<BTreeSet<_>>();
+            for kind in kinds {
+                push_managed_rule(rules, candidate, kind, selector.clone(), policy);
+            }
+            Ok(())
+        }
+        CandidateSelector::NamePrefix {
+            resource_kind,
+            prefix,
+        } => {
+            let kind = parse_resource_kind(resource_kind).ok_or_else(|| {
+                ConfiguratorError::Invalid(format!(
+                    "candidate {} has unknown resource kind {resource_kind:?}",
+                    candidate.id
+                ))
+            })?;
+            let selector = Selectors {
+                names: vec![format!("^{}", regex::escape(prefix))],
+                ..Selectors::default()
+            };
+            push_managed_rule(rules, candidate, kind, selector, policy);
+            Ok(())
+        }
+        CandidateSelector::BuildCache => Ok(()),
+    }
 }
 
 fn push_managed_rule(
@@ -1324,6 +1428,111 @@ mod tests {
             survey.candidates[0].selector,
             CandidateSelector::ExactLabel { .. }
         ));
+        let warning = survey.candidates[0]
+            .warning
+            .as_deref()
+            .expect("Compose warning");
+        assert!(warning.contains("docker compose down"));
+        assert!(warning.contains("stopped containers become eligible after 2h"));
+    }
+
+    #[test]
+    fn display_order_keeps_the_canonical_candidate_vector_unchanged() {
+        let inventory = vec![
+            item(
+                ResourceKind::Container,
+                "compose",
+                "project-web",
+                &[("com.docker.compose.project", "project")],
+            ),
+            item(
+                ResourceKind::Container,
+                "agent",
+                "agent-web",
+                &[("devcontainer.local_folder", "/workspace")],
+            ),
+            item(ResourceKind::BuildCache, "cache", "cache", &[]),
+        ];
+        let survey = survey_inventory(&inventory);
+        let canonical = survey
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect::<Vec<_>>();
+        assert!(canonical[0].starts_with("agent-label/"));
+        assert_eq!(canonical[1], "build-cache");
+        assert!(canonical[2].starts_with("compose/"));
+
+        let display = candidate_display_indices(&survey.candidates)
+            .into_iter()
+            .map(|index| survey.candidates[index].id.clone())
+            .collect::<Vec<_>>();
+        assert!(display[0].starts_with("agent-label/"));
+        assert!(display[1].starts_with("compose/"));
+        assert_eq!(display[2], "build-cache");
+        assert_eq!(
+            canonical,
+            survey
+                .candidates
+                .iter()
+                .map(|candidate| candidate.id.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn compose_warning_tracks_generated_policy_and_zero_pending_running_preview() {
+        let mut container = item(
+            ResourceKind::Container,
+            "container",
+            "project-web",
+            &[("com.docker.compose.project", "project")],
+        );
+        container.state = ResourceState::Running;
+        let mut volume = item(
+            ResourceKind::Volume,
+            "volume",
+            "project-data",
+            &[("com.docker.compose.project", "project")],
+        );
+        volume.referenced = true;
+        let mut network = item(
+            ResourceKind::Network,
+            "network",
+            "project_default",
+            &[("com.docker.compose.project", "project")],
+        );
+        network.referenced = true;
+        let inventory = vec![container, volume, network];
+        let mut survey = survey_inventory(&inventory);
+        let mut policy = PolicyProfile::Workstation.settings();
+        policy.stopped_container_ttl = "3h".to_owned();
+        policy.volume_ttl = "5d".to_owned();
+        refresh_candidate_warnings(&mut survey, &policy);
+
+        let candidate = &survey.candidates[0];
+        let warning = candidate.warning.as_deref().expect("Compose warning");
+        assert!(warning.contains("preview zero removals now"));
+        assert!(warning.contains("stopped containers become eligible after 3h"));
+        assert!(warning.contains(
+            "detached volumes become eligible immediately when their resource age already exceeds 5d"
+        ));
+        assert!(warning.contains("empty networks become eligible immediately"));
+
+        let proposal = propose_configuration(&ProposalRequest {
+            base_source: "",
+            source_existed: false,
+            target_path: Path::new("config.toml"),
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::Workstation,
+            policy: Some(&policy),
+            candidate_ids: std::slice::from_ref(&candidate.id),
+            now_epoch_seconds: 10_000,
+        })
+        .expect("proposal");
+        assert_eq!(proposal.preview.after_pending, 0);
+        assert_eq!(proposal.warnings, vec![warning.to_owned()]);
     }
 
     #[test]

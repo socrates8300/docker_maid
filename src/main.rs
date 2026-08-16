@@ -2,9 +2,9 @@ use clap::{error::ErrorKind, Args, Parser, Subcommand, ValueEnum};
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
 use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
 use docker_maid::configurator::{
-    add_name_prefix_candidate, configuration_target_path, propose_configuration, survey_inventory,
-    write_proposal, ConfigProposal, ConfiguratorError, PolicyProfile, PolicySettings,
-    ProposalRequest,
+    add_name_prefix_candidate, candidate_display_indices, configuration_target_path,
+    propose_configuration, survey_inventory, write_proposal, ConfigProposal, ConfiguratorError,
+    PolicyProfile, PolicySettings, ProposalRequest,
 };
 use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::{collect_inventory, collect_inventory_for_configuration};
@@ -609,7 +609,8 @@ fn render_config_survey(survey: &docker_maid::configurator::ConfiguratorSurvey) 
         return output;
     }
     output.push_str("CANDIDATE\tRESOURCES\tBYTES\tEVIDENCE\n");
-    for candidate in &survey.candidates {
+    for index in candidate_display_indices(&survey.candidates) {
+        let candidate = &survey.candidates[index];
         let _ = writeln!(
             output,
             "{}\t{}\t{}\t{}",
