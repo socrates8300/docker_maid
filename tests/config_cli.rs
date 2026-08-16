@@ -64,8 +64,18 @@ fn generated_default_validates_without_docker() {
     assert!(generated.status.success());
     assert!(generated.stderr.is_empty());
 
+    let source = String::from_utf8(generated.stdout).expect("UTF-8 generated config");
+    let parsed = docker_maid::config::Config::parse(&source, std::path::Path::new("<default>"))
+        .expect("parse generated config");
+    parsed.validate().expect("validate generated config");
+    assert!(parsed.rules.containers.is_empty());
+    assert!(parsed.rules.images.is_empty());
+    assert!(parsed.rules.volumes.is_empty());
+    assert!(parsed.rules.networks.is_empty());
+    assert!(parsed.rules.build_cache.is_none());
+
     let path = root.join("generated.toml");
-    fs::write(&path, generated.stdout).expect("write generated config");
+    fs::write(&path, source).expect("write generated config");
     let checked = run(
         &[
             "--config",
@@ -82,6 +92,30 @@ fn generated_default_validates_without_docker() {
     );
     assert!(String::from_utf8_lossy(&checked.stdout).contains("configuration valid:"));
 
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn invalid_configurator_override_fails_before_docker_contact() {
+    let root = temp_dir("configurator-override");
+    let output = run(
+        &[
+            "config",
+            "propose",
+            "--profile",
+            "workstation",
+            "--container-ttl",
+            "0s",
+            "--candidate",
+            "anything",
+        ],
+        &root,
+    );
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("stopped container TTL must be greater than zero"));
+    assert!(!stderr.contains("Docker"));
     fs::remove_dir_all(root).expect("remove test directory");
 }
 

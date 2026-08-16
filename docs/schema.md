@@ -143,6 +143,21 @@ A rule is `regressed` only when its previous completed pass match count was non-
 
 `config default`, `config check`, and `config print` return `command`, `path`, and the parsed `configuration` object. `path` is `null` for the built-in default.
 
+`config survey --format json` returns a schema-versioned document with a
+stable `snapshot_id`, inventory summary, and sorted `candidates`. Each
+candidate contains its stable ID, exact evidence, selector type, current
+resource IDs, known bytes, and any unscoped warning.
+
+`config propose --format json` returns the complete write artifact. It includes
+the stable proposal and snapshot IDs, target path, base and result hashes,
+profile plus editable policy values, selected candidate IDs, generated managed
+rule IDs, before/after pending counts, warnings, and `resulting_source`.
+
+`config write --proposal <path> --format json` returns the proposal ID, written
+path, optional backup path, and result hash. A changed source or Docker
+inventory rejects the write with exit `3`. Configurator documents use
+`schema_version: 1`; fields are additive-only.
+
 `--version --format json` returns `command: "version"` and `version`.
 
 ## Daemon NDJSON

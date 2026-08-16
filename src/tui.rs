@@ -9,8 +9,13 @@ use crossterm::terminal::{
 };
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
 use docker_maid::config::{Config, ConfigError, LoadedConfig};
+use docker_maid::configurator::{
+    add_name_prefix_candidate, configuration_target_path, propose_configuration, survey_inventory,
+    write_proposal, ConfigProposal, ConfiguratorError, ConfiguratorSurvey, PolicyProfile,
+    PolicySettings, ProposalRequest, MANAGED_ID_PREFIX,
+};
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
-use docker_maid::inventory::collect_inventory;
+use docker_maid::inventory::collect_inventory_for_configuration;
 use docker_maid::plan::{
     build_plan_with_protection, Action, Decision, Disposition, Plan, ResourceKind,
 };
@@ -25,7 +30,7 @@ use ratatui::widgets::{
     TableState, Tabs, Wrap,
 };
 use ratatui::{Frame, Terminal};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
@@ -39,7 +44,7 @@ enum View {
     Inventory,
     Plan,
     Activity,
-    Rules,
+    Configure,
 }
 
 impl View {
@@ -48,7 +53,7 @@ impl View {
         Self::Inventory,
         Self::Plan,
         Self::Activity,
-        Self::Rules,
+        Self::Configure,
     ];
 
     fn index(self) -> usize {
@@ -57,7 +62,7 @@ impl View {
             Self::Inventory => 1,
             Self::Plan => 2,
             Self::Activity => 3,
-            Self::Rules => 4,
+            Self::Configure => 4,
         }
     }
 
@@ -67,7 +72,7 @@ impl View {
             Self::Inventory => "Inventory",
             Self::Plan => "Plan",
             Self::Activity => "Activity",
-            Self::Rules => "Rules",
+            Self::Configure => "Configure",
         }
     }
 }
@@ -77,12 +82,51 @@ enum Overlay {
     None,
     Help,
     Confirm,
+    CacheConfirm,
+    ConfigSave,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlanValidity {
     Valid,
     Stale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Editor {
+    None,
+    Filter,
+    Prefix,
+    Policy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolicyField {
+    Containers,
+    Images,
+    Volumes,
+    CacheAge,
+    CacheBytes,
+}
+
+impl PolicyField {
+    const ALL: [Self; 5] = [
+        Self::Containers,
+        Self::Images,
+        Self::Volumes,
+        Self::CacheAge,
+        Self::CacheBytes,
+    ];
+
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Containers => "stopped containers",
+            Self::Images => "images",
+            Self::Volumes => "volumes",
+            Self::CacheAge => "build-cache age",
+            Self::CacheBytes => "build-cache bytes",
+        }
+    }
 }
 
 struct App {
@@ -101,12 +145,20 @@ struct App {
     inventory_kind: ResourceKind,
     selected: usize,
     filter: String,
-    editing_filter: bool,
+    editor: Editor,
     detail_focused: bool,
     overlay: Overlay,
     confirm_scroll: usize,
     activity_scroll: u16,
     rules_scroll: u16,
+    survey: ConfiguratorSurvey,
+    configure_selected: BTreeSet<String>,
+    configure_row: usize,
+    configure_profile: PolicyProfile,
+    configure_policy: PolicySettings,
+    policy_field: usize,
+    config_proposal: Option<ConfigProposal>,
+    prefix_input: String,
     status: String,
 }
 
@@ -118,18 +170,25 @@ impl App {
         let protection = protection_store.snapshot()?;
         let plan_created_at = epoch_seconds()?;
         let config_hash = stable_config_hash(&loaded.source);
-        let (plan, docker_error) = match collect_inventory(&loaded.config).await {
+        let (plan, survey, docker_error) = match collect_inventory_for_configuration().await {
             Ok(inventory) => (
-                build_plan_with_protection(&loaded.config, inventory, plan_created_at, &protection)
-                    .map_err(|error| {
-                        RunError::Internal(format!("cannot build TUI snapshot: {error}"))
-                    })?,
+                build_plan_with_protection(
+                    &loaded.config,
+                    inventory.clone(),
+                    plan_created_at,
+                    &protection,
+                )
+                .map_err(|error| {
+                    RunError::Internal(format!("cannot build TUI snapshot: {error}"))
+                })?,
+                survey_inventory(&inventory),
                 None,
             ),
             Err(error) => (
                 Plan {
                     decisions: Vec::new(),
                 },
+                survey_inventory(&[]),
                 Some(error.to_string()),
             ),
         };
@@ -144,6 +203,7 @@ impl App {
             || startup_status(&loaded, built_in_config, &plan),
             |error| format!("Docker unavailable: {error} • fix the endpoint and press r"),
         );
+        let configure_selected = managed_candidate_ids(&loaded.config, &survey);
         Ok(Self {
             explicit_config: explicit_config.map(Path::to_path_buf),
             loaded,
@@ -156,16 +216,28 @@ impl App {
             config_hash,
             plan_validity,
             history,
-            view: View::Dashboard,
+            view: if built_in_config {
+                View::Configure
+            } else {
+                View::Dashboard
+            },
             inventory_kind: ResourceKind::Container,
             selected: 0,
             filter: String::new(),
-            editing_filter: false,
+            editor: Editor::None,
             detail_focused: false,
             overlay: Overlay::None,
             confirm_scroll: 0,
             activity_scroll: 0,
             rules_scroll: 0,
+            survey,
+            configure_selected,
+            configure_row: 0,
+            configure_profile: PolicyProfile::Workstation,
+            configure_policy: PolicyProfile::Workstation.settings(),
+            policy_field: 0,
+            config_proposal: None,
+            prefix_input: String::new(),
             status,
         })
     }
@@ -184,14 +256,16 @@ impl App {
     async fn refresh(&mut self) -> Result<(), RunError> {
         let (loaded, built_in_config) = load_tui_config(self.explicit_config.as_deref())?;
         let protection = self.protection_store.snapshot()?;
-        let inventory = collect_inventory(&loaded.config).await?;
+        let inventory = collect_inventory_for_configuration().await?;
         let plan_created_at = epoch_seconds()?;
         let config_hash = stable_config_hash(&loaded.source);
-        let plan =
-            build_plan_with_protection(&loaded.config, inventory, plan_created_at, &protection)
-                .map_err(|error| {
-                    RunError::Internal(format!("cannot refresh TUI snapshot: {error}"))
-                })?;
+        let plan = build_plan_with_protection(
+            &loaded.config,
+            inventory.clone(),
+            plan_created_at,
+            &protection,
+        )
+        .map_err(|error| RunError::Internal(format!("cannot refresh TUI snapshot: {error}")))?;
         let history = ActivityJournal::new(self.state_paths.clone()).completed_passes()?;
         self.loaded = loaded;
         self.built_in_config = built_in_config;
@@ -201,6 +275,20 @@ impl App {
         self.config_hash = config_hash;
         self.plan_validity = PlanValidity::Valid;
         self.history = history;
+        self.survey = survey_inventory(&inventory);
+        self.configure_selected.retain(|id| {
+            self.survey
+                .candidates
+                .iter()
+                .any(|candidate| &candidate.id == id)
+        });
+        if self.configure_selected.is_empty() {
+            self.configure_selected = managed_candidate_ids(&self.loaded.config, &self.survey);
+        }
+        self.config_proposal = None;
+        self.configure_row = self
+            .configure_row
+            .min(self.survey.candidates.len().saturating_sub(1));
         self.clamp_selection();
         self.status = format!(
             "Refreshed: {} resources, {} pending removals",
@@ -256,7 +344,8 @@ impl App {
         let length = match self.view {
             View::Inventory => self.filtered_inventory().len(),
             View::Plan => self.plan_targets().len(),
-            View::Dashboard | View::Activity | View::Rules => 0,
+            View::Configure => self.survey.candidates.len(),
+            View::Dashboard | View::Activity => 0,
         };
         self.selected = self.selected.min(length.saturating_sub(1));
     }
@@ -278,11 +367,196 @@ impl App {
             View::Activity => {
                 self.activity_scroll = move_scroll(self.activity_scroll, delta);
             }
-            View::Rules => {
-                self.rules_scroll = move_scroll(self.rules_scroll, delta);
+            View::Configure => {
+                if self.survey.candidates.is_empty() {
+                    self.configure_row = 0;
+                } else {
+                    self.configure_row = self
+                        .configure_row
+                        .saturating_add_signed(delta)
+                        .min(self.survey.candidates.len() - 1);
+                }
             }
             View::Dashboard => {}
         }
+    }
+
+    fn selected_candidate(&self) -> Option<&docker_maid::configurator::CandidateFamily> {
+        self.survey.candidates.get(self.configure_row)
+    }
+
+    fn toggle_selected_candidate(&mut self) {
+        let Some(candidate) = self.selected_candidate() else {
+            replace_status(&mut self.status, "No ownership candidate selected");
+            return;
+        };
+        let id = candidate.id.clone();
+        let build_cache = matches!(
+            candidate.selector,
+            docker_maid::configurator::CandidateSelector::BuildCache
+        );
+        if self.configure_selected.remove(&id) {
+            self.config_proposal = None;
+            self.status = format!("Excluded candidate {id}");
+        } else if build_cache {
+            self.overlay = Overlay::CacheConfirm;
+        } else {
+            self.configure_selected.insert(id.clone());
+            self.config_proposal = None;
+            self.status = format!("Selected candidate {id}");
+        }
+    }
+
+    fn cycle_profile(&mut self, delta: isize) {
+        let current = PolicyProfile::ALL
+            .iter()
+            .position(|profile| *profile == self.configure_profile)
+            .unwrap_or(1);
+        let next = current
+            .saturating_add_signed(delta)
+            .min(PolicyProfile::ALL.len() - 1);
+        self.configure_profile = PolicyProfile::ALL[next];
+        self.configure_policy = self.configure_profile.settings();
+        self.config_proposal = None;
+        self.status = format!("Policy profile: {}", self.configure_profile.title());
+    }
+
+    fn cycle_policy_field(&mut self, delta: isize) {
+        self.policy_field = self
+            .policy_field
+            .saturating_add_signed(delta)
+            .min(PolicyField::ALL.len() - 1);
+        self.status = format!(
+            "Editable policy field: {} • press e",
+            PolicyField::ALL[self.policy_field].title()
+        );
+    }
+
+    fn start_policy_editor(&mut self) {
+        let field = PolicyField::ALL[self.policy_field];
+        self.prefix_input = policy_field_value(field, &self.configure_policy);
+        self.editor = Editor::Policy;
+        self.status = format!(
+            "Edit {} • durations use 15m/2h/7d; cache bytes accept 10GiB",
+            field.title()
+        );
+    }
+
+    fn accept_policy_value(&mut self) -> Result<(), RunError> {
+        let field = PolicyField::ALL[self.policy_field];
+        set_policy_field(field, &mut self.configure_policy, self.prefix_input.trim())?;
+        self.configure_policy.validate()?;
+        self.config_proposal = None;
+        self.editor = Editor::None;
+        self.status = format!(
+            "Updated {} to {}",
+            field.title(),
+            policy_field_value(field, &self.configure_policy)
+        );
+        Ok(())
+    }
+
+    fn preview_configuration(&mut self) -> Result<(), RunError> {
+        let target = configuration_target_path(
+            self.explicit_config.as_deref(),
+            (!self.built_in_config).then_some(self.loaded.path.as_path()),
+            std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|value| !value.is_empty())
+                .as_deref()
+                .map(Path::new),
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .as_deref()
+                .map(Path::new),
+        )?;
+        let inventory = self
+            .plan
+            .decisions
+            .iter()
+            .map(|decision| decision.resource.clone())
+            .collect::<Vec<_>>();
+        let ids = self.configure_selected.iter().cloned().collect::<Vec<_>>();
+        let proposal = propose_configuration(&ProposalRequest {
+            base_source: &self.loaded.source,
+            source_existed: !self.built_in_config,
+            target_path: &target,
+            survey: &self.survey,
+            inventory: &inventory,
+            profile: self.configure_profile,
+            policy: Some(&self.configure_policy),
+            candidate_ids: &ids,
+            now_epoch_seconds: self.plan_created_at,
+        })?;
+        self.status = format!(
+            "Proposal {}: {} pending removals; press s to review save",
+            proposal.proposal_id, proposal.preview.after_pending
+        );
+        self.config_proposal = Some(proposal);
+        Ok(())
+    }
+
+    fn start_prefix_editor(&mut self) {
+        let Some(decision) = self.selected_inventory() else {
+            replace_status(&mut self.status, "No inventory object selected");
+            return;
+        };
+        if decision.resource.kind == ResourceKind::BuildCache {
+            replace_status(
+                &mut self.status,
+                "Build cache has no name ownership surface",
+            );
+            return;
+        }
+        self.prefix_input = decision.resource.name.clone();
+        self.editor = Editor::Prefix;
+        replace_status(
+            &mut self.status,
+            "Edit the exact prefix; Enter adds it, Esc cancels",
+        );
+    }
+
+    fn accept_prefix(&mut self) -> Result<(), RunError> {
+        let kind = self.inventory_kind;
+        let inventory = self
+            .plan
+            .decisions
+            .iter()
+            .map(|decision| decision.resource.clone())
+            .collect::<Vec<_>>();
+        let id = add_name_prefix_candidate(
+            &mut self.survey,
+            &inventory,
+            kind,
+            self.prefix_input.trim(),
+        )?;
+        self.configure_selected.insert(id.clone());
+        self.configure_row = self
+            .survey
+            .candidates
+            .iter()
+            .position(|candidate| candidate.id == id)
+            .unwrap_or(0);
+        self.config_proposal = None;
+        self.editor = Editor::None;
+        self.view = View::Configure;
+        self.status = format!("Added operator-approved prefix candidate {id}");
+        Ok(())
+    }
+
+    async fn save_configuration(&mut self) -> Result<(), RunError> {
+        let proposal = self.config_proposal.clone().ok_or_else(|| {
+            RunError::Internal("configuration save opened without a proposal".to_owned())
+        })?;
+        let inventory = collect_inventory_for_configuration().await?;
+        let result = write_proposal(&proposal, &inventory)?;
+        self.explicit_config = Some(result.path.clone());
+        self.refresh().await?;
+        self.view = View::Plan;
+        self.status = format!(
+            "Saved {} • reviewed plan refreshed • apply remains a separate confirmation",
+            result.path.display()
+        );
+        Ok(())
     }
 
     fn change_inventory_kind(&mut self, delta: isize) {
@@ -490,7 +764,7 @@ async fn run_event_loop(
         tokio::select! {
             _ = signals.terminate.recv() => break,
             _ = signals.interrupt.recv() => break,
-            _ = refresh.tick(), if app.overlay != Overlay::Confirm => {
+            _ = refresh.tick(), if matches!(app.overlay, Overlay::None | Overlay::Help) => {
                 if let Err(error) = app.refresh().await {
                     app.plan_validity = PlanValidity::Stale;
                     app.overlay = Overlay::None;
@@ -500,7 +774,7 @@ async fn run_event_loop(
                 refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 refresh.tick().await;
             }
-            _ = activity.tick(), if app.overlay != Overlay::Confirm => {
+            _ = activity.tick(), if matches!(app.overlay, Overlay::None | Overlay::Help) => {
                 if let Err(error) = app.refresh_activity() {
                     app.status = format!("Activity refresh failed: {}", super::run_error_message(&error));
                 }
@@ -547,51 +821,25 @@ async fn handle_event(
     if key.kind != crossterm::event::KeyEventKind::Press {
         return Ok(false);
     }
-    if app.editing_filter {
+    if app.editor == Editor::Prefix {
+        handle_prefix_key(app, key)?;
+        return Ok(false);
+    }
+    if app.editor == Editor::Policy {
+        handle_policy_key(app, key)?;
+        return Ok(false);
+    }
+    if app.editor == Editor::Filter {
         handle_filter_key(app, key);
         return Ok(false);
     }
-    if app.overlay == Overlay::Help {
-        if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
-            app.overlay = Overlay::None;
-        }
+    if handle_overlay_key(terminal, app, key).await? {
         return Ok(false);
     }
-    if app.overlay == Overlay::Confirm {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('n') => {
-                app.overlay = Overlay::None;
-                replace_status(&mut app.status, "Plan application cancelled");
-            }
-            KeyCode::Enter => {
-                app.overlay = Overlay::None;
-                replace_status(&mut app.status, "Applying the confirmed immutable plan…");
-                draw(terminal, app)?;
-                app.apply_confirmed_plan().await?;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.confirm_scroll = app
-                    .confirm_scroll
-                    .saturating_add(1)
-                    .min(app.plan.pending_count().saturating_sub(1));
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.confirm_scroll = app.confirm_scroll.saturating_sub(1);
-            }
-            KeyCode::PageDown => {
-                app.confirm_scroll = app
-                    .confirm_scroll
-                    .saturating_add(10)
-                    .min(app.plan.pending_count().saturating_sub(1));
-            }
-            KeyCode::PageUp => {
-                app.confirm_scroll = app.confirm_scroll.saturating_sub(10);
-            }
-            _ => {}
-        }
-        return Ok(false);
-    }
+    handle_main_key(app, key).await
+}
 
+async fn handle_main_key(app: &mut App, key: KeyEvent) -> Result<bool, RunError> {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Ok(true);
     }
@@ -602,7 +850,7 @@ async fn handle_event(
         KeyCode::Char('2') => switch_view(app, View::Inventory),
         KeyCode::Char('3') => switch_view(app, View::Plan),
         KeyCode::Char('4') => switch_view(app, View::Activity),
-        KeyCode::Char('5') => switch_view(app, View::Rules),
+        KeyCode::Char('5') => switch_view(app, View::Configure),
         KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
         KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
         KeyCode::Left | KeyCode::Char('h') if app.view == View::Inventory => {
@@ -611,8 +859,17 @@ async fn handle_event(
         KeyCode::Right | KeyCode::Char('l') if app.view == View::Inventory => {
             app.change_inventory_kind(1);
         }
+        KeyCode::Left | KeyCode::Char('h') if app.view == View::Configure => {
+            app.cycle_profile(-1);
+        }
+        KeyCode::Right | KeyCode::Char('l') if app.view == View::Configure => {
+            app.cycle_profile(1);
+        }
+        KeyCode::Char('[') if app.view == View::Configure => app.cycle_policy_field(-1),
+        KeyCode::Char(']') if app.view == View::Configure => app.cycle_policy_field(1),
+        KeyCode::Char('e') if app.view == View::Configure => app.start_policy_editor(),
         KeyCode::Char('/') if app.view == View::Inventory => {
-            app.editing_filter = true;
+            app.editor = Editor::Filter;
             replace_status(
                 &mut app.status,
                 "Filter inventory; Enter accepts, Esc clears",
@@ -623,6 +880,22 @@ async fn handle_event(
         }
         KeyCode::Char('p') if app.view == View::Inventory => {
             app.toggle_protection().await?;
+        }
+        KeyCode::Char('c') if app.view == View::Inventory => app.start_prefix_editor(),
+        KeyCode::Enter | KeyCode::Char(' ') if app.view == View::Configure => {
+            app.toggle_selected_candidate();
+        }
+        KeyCode::Char('v') if app.view == View::Configure => {
+            if let Err(error) = app.preview_configuration() {
+                app.status = format!("Proposal blocked: {}", super::run_error_message(&error));
+            }
+        }
+        KeyCode::Char('s') if app.view == View::Configure => {
+            if app.config_proposal.is_some() {
+                app.overlay = Overlay::ConfigSave;
+            } else {
+                replace_status(&mut app.status, "Preview the proposal with v before saving");
+            }
         }
         KeyCode::Char('a') if matches!(app.view, View::Inventory | View::Plan) => {
             open_confirmation(app);
@@ -641,16 +914,108 @@ async fn handle_event(
     Ok(false)
 }
 
+async fn handle_overlay_key(
+    terminal: &mut CrosstermTerminal,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<bool, RunError> {
+    match app.overlay {
+        Overlay::None => return Ok(false),
+        Overlay::Help => {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
+                app.overlay = Overlay::None;
+            }
+        }
+        Overlay::Confirm => handle_plan_confirmation(terminal, app, key).await?,
+        Overlay::CacheConfirm => match key.code {
+            KeyCode::Esc | KeyCode::Char('n') => {
+                app.overlay = Overlay::None;
+                replace_status(&mut app.status, "Build-cache policy not enabled");
+            }
+            KeyCode::Enter | KeyCode::Char('y') => {
+                if let Some(candidate) = app.selected_candidate() {
+                    app.configure_selected.insert(candidate.id.clone());
+                    app.config_proposal = None;
+                }
+                app.overlay = Overlay::None;
+                replace_status(
+                    &mut app.status,
+                    "Enabled authorized-unscoped build-cache proposal; preview before save",
+                );
+            }
+            _ => {}
+        },
+        Overlay::ConfigSave => match key.code {
+            KeyCode::Esc | KeyCode::Char('n') => {
+                app.overlay = Overlay::None;
+                replace_status(&mut app.status, "Configuration save cancelled");
+            }
+            KeyCode::Enter | KeyCode::Char('y') => {
+                app.overlay = Overlay::None;
+                replace_status(&mut app.status, "Writing validated configuration…");
+                draw(terminal, app)?;
+                if let Err(error) = app.save_configuration().await {
+                    app.status = format!(
+                        "Save blocked; refresh and review again: {}",
+                        super::run_error_message(&error)
+                    );
+                }
+            }
+            _ => {}
+        },
+    }
+    Ok(true)
+}
+
+async fn handle_plan_confirmation(
+    terminal: &mut CrosstermTerminal,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<(), RunError> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('n') => {
+            app.overlay = Overlay::None;
+            replace_status(&mut app.status, "Plan application cancelled");
+        }
+        KeyCode::Enter => {
+            app.overlay = Overlay::None;
+            replace_status(&mut app.status, "Applying the confirmed immutable plan…");
+            draw(terminal, app)?;
+            app.apply_confirmed_plan().await?;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.confirm_scroll = app
+                .confirm_scroll
+                .saturating_add(1)
+                .min(app.plan.pending_count().saturating_sub(1));
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.confirm_scroll = app.confirm_scroll.saturating_sub(1);
+        }
+        KeyCode::PageDown => {
+            app.confirm_scroll = app
+                .confirm_scroll
+                .saturating_add(10)
+                .min(app.plan.pending_count().saturating_sub(1));
+        }
+        KeyCode::PageUp => {
+            app.confirm_scroll = app.confirm_scroll.saturating_sub(10);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn handle_filter_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.filter.clear();
-            app.editing_filter = false;
+            app.editor = Editor::None;
             app.selected = 0;
             replace_status(&mut app.status, "Filter cleared");
         }
         KeyCode::Enter => {
-            app.editing_filter = false;
+            app.editor = Editor::None;
             app.selected = 0;
             app.status = format!("Inventory filter: {:?}", app.filter);
         }
@@ -666,6 +1031,48 @@ fn handle_filter_key(app: &mut App, key: KeyEvent) {
         }
         _ => {}
     }
+}
+
+fn handle_prefix_key(app: &mut App, key: KeyEvent) -> Result<(), RunError> {
+    match key.code {
+        KeyCode::Esc => {
+            app.editor = Editor::None;
+            app.prefix_input.clear();
+            replace_status(&mut app.status, "Name-prefix candidate cancelled");
+        }
+        KeyCode::Enter => app.accept_prefix()?,
+        KeyCode::Backspace => {
+            app.prefix_input.pop();
+        }
+        KeyCode::Char(character)
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            app.prefix_input.push(character);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_policy_key(app: &mut App, key: KeyEvent) -> Result<(), RunError> {
+    match key.code {
+        KeyCode::Esc => {
+            app.editor = Editor::None;
+            app.prefix_input.clear();
+            replace_status(&mut app.status, "Policy edit cancelled");
+        }
+        KeyCode::Enter => app.accept_policy_value()?,
+        KeyCode::Backspace => {
+            app.prefix_input.pop();
+        }
+        KeyCode::Char(character)
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            app.prefix_input.push(character);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn open_confirmation(app: &mut App) {
@@ -713,7 +1120,7 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
         View::Inventory => render_inventory(frame, app, areas[2]),
         View::Plan => render_plan(frame, app, areas[2]),
         View::Activity => render_activity(frame, app, areas[2]),
-        View::Rules => render_rules(frame, app, areas[2]),
+        View::Configure => render_configure(frame, app, areas[2]),
     }
     render_footer(frame, app, areas[3]);
 
@@ -721,6 +1128,8 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
         Overlay::None => {}
         Overlay::Help => render_help(frame),
         Overlay::Confirm => render_confirmation(frame, app),
+        Overlay::CacheConfirm => render_cache_confirmation(frame, app),
+        Overlay::ConfigSave => render_config_save(frame, app),
     }
 }
 
@@ -1180,52 +1589,183 @@ fn render_activity(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn render_rules(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let mut counters = BTreeMap::<String, usize>::new();
-    for decision in &app.plan.decisions {
-        if let Some(rule) = &decision.matched_rule {
-            *counters.entry(rule.clone()).or_default() += 1;
-        }
-    }
-    let mut source = String::new();
-    source.push_str("Live match counters\n");
-    if counters.is_empty() {
-        source.push_str("  no rules currently match\n");
-    } else {
-        for (rule, count) in counters {
-            let _ = writeln!(source, "  {rule}: {count}");
-        }
-    }
-    source.push('\n');
-    if app.built_in_config {
-        source.push_str(
-            "# Safe built-in mode: no cleanup rules.\n# Create a starter config, then press r:\n# docker_maid config default > docker_maid.toml\n",
-        );
-    } else {
-        source.push_str(&app.loaded.source);
-    }
+fn render_configure(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(61), Constraint::Percentage(39)])
+        .split(area);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(5)])
+        .split(columns[0]);
+    render_configure_header(frame, app, left[0]);
+    render_configure_candidates(frame, app, left[1]);
     frame.render_widget(
-        Paragraph::new(source)
+        Paragraph::new(configure_detail(app))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!("Rules • {}", app.loaded.path.display())),
+                    .title("Policy and before/after preview"),
             )
             .scroll((app.rules_scroll, 0))
             .wrap(Wrap { trim: false }),
+        columns[1],
+    );
+}
+
+fn render_configure_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let current_stage = if app.config_proposal.is_some() {
+        "Preview ready • s saves"
+    } else if app.configure_selected.is_empty() {
+        "Select ownership candidates"
+    } else {
+        "Press v to build the real plan preview"
+    };
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Profile: {} [h/l] • TTL c={} i={} v={} • cache={}/{}\nSelected: {} of {} • {current_stage} • [{}] field, e edit",
+            app.configure_profile.title(),
+            app.configure_policy.stopped_container_ttl,
+            app.configure_policy.image_ttl,
+            app.configure_policy.volume_ttl,
+            app.configure_policy.build_cache_ttl,
+            format_bytes(app.configure_policy.build_cache_max_bytes),
+            app.configure_selected.len(),
+            app.survey.candidates.len(),
+            PolicyField::ALL[app.policy_field].title()
+        ))
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            "Survey {} • {} unowned",
+            app.survey.snapshot_id, app.survey.summary.unowned_resources
+        ))),
         area,
     );
 }
 
+fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let rows = app
+        .survey
+        .candidates
+        .iter()
+        .map(|candidate| {
+            let selected = if app.configure_selected.contains(&candidate.id) {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+            let style = if candidate.warning.is_some() {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![
+                Cell::from(selected),
+                Cell::from(candidate.title.clone()),
+                Cell::from(candidate.resources.len().to_string()),
+                Cell::from(format_bytes(candidate.known_bytes)),
+            ])
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(4),
+            Constraint::Percentage(62),
+            Constraint::Length(10),
+            Constraint::Length(12),
+        ],
+    )
+    .header(
+        Row::new(["USE", "OWNERSHIP EVIDENCE", "OBJECTS", "KNOWN SIZE"])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Candidates • Space/Enter toggles"),
+    )
+    .row_highlight_style(Style::default().bg(Color::DarkGray))
+    .highlight_symbol("▶ ");
+    let mut table_state = TableState::default().with_selected(Some(app.configure_row));
+    frame.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn configure_detail(app: &App) -> String {
+    if let Some(proposal) = &app.config_proposal {
+        let warnings = if proposal.warnings.is_empty() {
+            "none".to_owned()
+        } else {
+            proposal.warnings.join("\n")
+        };
+        format!(
+            "Proposal {}\n\nTarget: {}\nProfile: {}\nCandidates: {}\nSelected objects: {}\n\nPending before: {}\nPending after: {}\nNewly pending: {}\nEstimated reclaim: {}\n\nWarnings:\n{}\n\nThe save changes configuration only. It never deletes Docker objects. After save, the Plan view refreshes and apply remains a separate confirmation.",
+            proposal.proposal_id,
+            proposal.target_path.display(),
+            proposal.profile,
+            proposal.candidate_ids.len(),
+            proposal.preview.selected_resources,
+            proposal.preview.before_pending,
+            proposal.preview.after_pending,
+            proposal.preview.newly_pending,
+            format_bytes(proposal.preview.estimated_reclaim_bytes),
+            warnings
+        )
+    } else if let Some(candidate) = app.selected_candidate() {
+        let mut detail = format!(
+            "{}\n\nID: {}\nEvidence: {}\nObjects: {}\nKnown size: {}\n",
+            candidate.title,
+            candidate.id,
+            candidate.evidence,
+            candidate.resources.len(),
+            format_bytes(candidate.known_bytes)
+        );
+        if let Some(warning) = &candidate.warning {
+            let _ = writeln!(detail, "\n{warning}");
+            detail.push_str("Enable only when daemon-wide cache cleanup is intentional.\n");
+        }
+        detail.push_str("\nObserved objects:\n");
+        for resource in candidate.resources.iter().take(12) {
+            let _ = writeln!(
+                detail,
+                "• {} {}{}{}",
+                resource.resource_kind,
+                resource.name,
+                if resource.running { " • running" } else { "" },
+                if resource.referenced {
+                    " • referenced"
+                } else {
+                    ""
+                }
+            );
+        }
+        if candidate.resources.len() > 12 {
+            let _ = writeln!(detail, "• … {} more", candidate.resources.len() - 12);
+        }
+        detail
+    } else {
+        "No exact agent or Compose ownership evidence was found.\n\nUnlabeled objects remain unowned. In Inventory, select an object and press c to explicitly approve a name prefix."
+            .to_owned()
+    }
+}
+
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let status = if app.editing_filter {
+    let status = if app.editor == Editor::Prefix {
+        format!("prefix={}▌", app.prefix_input)
+    } else if app.editor == Editor::Policy {
+        format!(
+            "{}={}▌",
+            PolicyField::ALL[app.policy_field].title(),
+            app.prefix_input
+        )
+    } else if app.editor == Editor::Filter {
         format!("/{}▌", app.filter)
     } else {
         app.status.clone()
     };
     let line = Line::from(vec![
         Span::styled(
-            " ↑↓/jk move · 1–5 views · / filter · p protect · a apply · r refresh · ? help · q quit ",
+            " ↑↓/jk move · 1–5 views · c prefix · p protect · h/l profile · [/] field · e edit · v preview · s save · a apply · q quit ",
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::raw(format!("  {status}")),
@@ -1245,6 +1785,12 @@ fn render_help(frame: &mut Frame<'_>) {
         Line::from("/           Filter inventory; Enter accepts; Esc clears"),
         Line::from("Enter       Focus inventory detail"),
         Line::from("p           Toggle typed runtime protection"),
+        Line::from("c           Create an explicit name-prefix candidate from Inventory"),
+        Line::from("Space/Enter Select a Configure ownership candidate"),
+        Line::from("h/l         Change the Configure policy profile"),
+        Line::from("[/] then e  Select and edit a profile value"),
+        Line::from("v           Preview the exact proposed config and removal plan"),
+        Line::from("s           Save a reviewed proposal (configuration only)"),
         Line::from("a or y      Review the policy-generated plan"),
         Line::from("r           Refresh configuration, state, and Docker inventory"),
         Line::from("? or Esc    Close help"),
@@ -1255,6 +1801,58 @@ fn render_help(frame: &mut Frame<'_>) {
     frame.render_widget(
         Paragraph::new(help)
             .block(Block::default().borders(Borders::ALL).title("Help"))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn render_cache_confirmation(frame: &mut Frame<'_>, app: &App) {
+    let area = centered_rect(70, 45, frame.area());
+    frame.render_widget(Clear, area);
+    let count = app
+        .selected_candidate()
+        .map_or(0, |candidate| candidate.resources.len());
+    let text = format!(
+        "Build cache is not attributable to an agent, project, label, or name.\n\nThis enables an authorized-unscoped proposal for {count} current cache records. The {} profile suggests an age floor and byte budget.\n\nNo deletion happens here. The next stage shows the exact plan.\n\nEnter/y: enable candidate    Esc/n: cancel",
+        app.configure_profile.title()
+    );
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("WARNING • daemon-wide build cache"),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn render_config_save(frame: &mut Frame<'_>, app: &App) {
+    let area = centered_rect(76, 58, frame.area());
+    frame.render_widget(Clear, area);
+    let text = app.config_proposal.as_ref().map_or_else(
+        || "No proposal is available.".to_owned(),
+        |proposal| {
+            format!(
+                "Write reviewed configuration?\n\nPath: {}\nProposal: {}\nProfile: {}\nSelected objects: {}\nPending removals after save: {}\nNewly pending: {}\nEstimated reclaim: {}\n\nThe writer checks the source hash and Docker inventory again. Existing config is backed up. Manual rules and comments remain outside the managed region.\n\nThis action does not delete Docker objects.\n\nEnter/y: save    Esc/n: cancel",
+                proposal.target_path.display(),
+                proposal.proposal_id,
+                proposal.profile,
+                proposal.preview.selected_resources,
+                proposal.preview.after_pending,
+                proposal.preview.newly_pending,
+                format_bytes(proposal.preview.estimated_reclaim_bytes)
+            )
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Confirm configuration write"),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
@@ -1353,18 +1951,100 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
+fn policy_field_value(field: PolicyField, policy: &PolicySettings) -> String {
+    match field {
+        PolicyField::Containers => policy.stopped_container_ttl.clone(),
+        PolicyField::Images => policy.image_ttl.clone(),
+        PolicyField::Volumes => policy.volume_ttl.clone(),
+        PolicyField::CacheAge => policy.build_cache_ttl.clone(),
+        PolicyField::CacheBytes => policy.build_cache_max_bytes.to_string(),
+    }
+}
+
+fn set_policy_field(
+    field: PolicyField,
+    policy: &mut PolicySettings,
+    value: &str,
+) -> Result<(), ConfiguratorError> {
+    if value.is_empty() {
+        return Err(ConfiguratorError::Invalid(
+            "policy value must not be blank".to_owned(),
+        ));
+    }
+    match field {
+        PolicyField::Containers => value.clone_into(&mut policy.stopped_container_ttl),
+        PolicyField::Images => value.clone_into(&mut policy.image_ttl),
+        PolicyField::Volumes => value.clone_into(&mut policy.volume_ttl),
+        PolicyField::CacheAge => value.clone_into(&mut policy.build_cache_ttl),
+        PolicyField::CacheBytes => policy.build_cache_max_bytes = parse_byte_budget(value)?,
+    }
+    Ok(())
+}
+
+fn parse_byte_budget(value: &str) -> Result<u64, ConfiguratorError> {
+    let compact = value.trim().replace('_', "");
+    let lower = compact.to_ascii_lowercase();
+    let suffixes = [
+        ("gib", 1024u64.pow(3)),
+        ("mib", 1024u64.pow(2)),
+        ("kib", 1024),
+        ("gb", 1_000_000_000),
+        ("mb", 1_000_000),
+        ("kb", 1_000),
+    ];
+    let (number, multiplier) = suffixes
+        .iter()
+        .find_map(|(suffix, multiplier)| {
+            lower
+                .strip_suffix(suffix)
+                .map(|number| (number.trim(), *multiplier))
+        })
+        .unwrap_or((lower.as_str(), 1));
+    let number = number.parse::<u64>().map_err(|error| {
+        ConfiguratorError::Invalid(format!(
+            "byte budget {value:?} is invalid; use bytes or a suffix such as 10GiB: {error}"
+        ))
+    })?;
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| ConfiguratorError::Invalid(format!("byte budget {value:?} is too large")))
+}
+
 fn load_tui_config(explicit: Option<&Path>) -> Result<(LoadedConfig, bool), RunError> {
     match load_selected_config(explicit) {
         Ok(loaded) => Ok((loaded, false)),
         Err(RunError::Config(ConfigError::NotFound { .. })) if explicit.is_none() => {
-            let current_dir = std::env::current_dir().map_err(|error| {
-                RunError::Internal(format!("cannot resolve current directory: {error}"))
-            })?;
+            let path = configuration_target_path(
+                None,
+                None,
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .filter(|value| !value.is_empty())
+                    .as_deref()
+                    .map(Path::new),
+                std::env::var_os("HOME")
+                    .filter(|value| !value.is_empty())
+                    .as_deref()
+                    .map(Path::new),
+            )?;
             let config = Config::default();
             config.validate()?;
             Ok((
                 LoadedConfig {
-                    path: current_dir.join("docker_maid.toml"),
+                    path,
+                    config,
+                    source: String::new(),
+                },
+                true,
+            ))
+        }
+        Err(RunError::Config(ConfigError::Read { path, source }))
+            if explicit.is_some() && source.kind() == io::ErrorKind::NotFound =>
+        {
+            let config = Config::default();
+            config.validate()?;
+            Ok((
+                LoadedConfig {
+                    path,
                     config,
                     source: String::new(),
                 },
@@ -1377,8 +2057,10 @@ fn load_tui_config(explicit: Option<&Path>) -> Result<(LoadedConfig, bool), RunE
 
 fn startup_status(loaded: &LoadedConfig, built_in_config: bool, plan: &Plan) -> String {
     if built_in_config {
-        "No config found • safe read-only mode • create one with: docker_maid config default > docker_maid.toml"
-            .to_owned()
+        format!(
+            "No config found • Configure opened • proposed writes target {}",
+            loaded.path.display()
+        )
     } else if loaded.config.rules.build_cache.is_some() {
         format!(
             "Loaded {} • WARNING: build cache is authorized-unscoped",
@@ -1391,6 +2073,56 @@ fn startup_status(loaded: &LoadedConfig, built_in_config: bool, plan: &Plan) -> 
             plan.pending_count()
         )
     }
+}
+
+fn managed_candidate_ids(config: &Config, survey: &ConfiguratorSurvey) -> BTreeSet<String> {
+    let mut ids = config
+        .rules
+        .containers
+        .iter()
+        .map(|rule| rule.common.id.as_deref())
+        .chain(
+            config
+                .rules
+                .images
+                .iter()
+                .map(|rule| rule.common.id.as_deref()),
+        )
+        .chain(
+            config
+                .rules
+                .volumes
+                .iter()
+                .map(|rule| rule.common.id.as_deref()),
+        )
+        .chain(
+            config
+                .rules
+                .networks
+                .iter()
+                .map(|rule| rule.common.id.as_deref()),
+        )
+        .flatten()
+        .filter_map(|id| id.strip_prefix(MANAGED_ID_PREFIX))
+        .filter_map(|suffix| suffix.rsplit_once('/').map(|(candidate, _)| candidate))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if config
+        .rules
+        .build_cache
+        .as_ref()
+        .and_then(|rule| rule.id.as_deref())
+        == Some("docker-maid.configure/build-cache")
+    {
+        ids.insert("build-cache".to_owned());
+    }
+    ids.retain(|id| {
+        survey
+            .candidates
+            .iter()
+            .any(|candidate| &candidate.id == id)
+    });
+    ids
 }
 
 fn execution_status(report: &ExecutionReport) -> String {
@@ -1617,6 +2349,16 @@ mod tests {
     }
 
     #[test]
+    fn editable_cache_budget_accepts_binary_suffixes_and_rejects_garbage() {
+        assert_eq!(
+            parse_byte_budget("10GiB").expect("budget"),
+            10 * 1024u64.pow(3)
+        );
+        assert_eq!(parse_byte_budget("500 MB").expect("budget"), 500_000_000);
+        assert!(parse_byte_budget("many").is_err());
+    }
+
+    #[test]
     fn inventory_detail_exposes_policy_reason_and_labels() {
         let decision = sample_decision();
         let detail = inventory_detail(&decision);
@@ -1655,6 +2397,13 @@ mod tests {
         let plan = Plan {
             decisions: vec![sample_decision()],
         };
+        let survey = survey_inventory(
+            &plan
+                .decisions
+                .iter()
+                .map(|decision| decision.resource.clone())
+                .collect::<Vec<_>>(),
+        );
         let mut app = App {
             explicit_config: Some(config_path.clone()),
             loaded: LoadedConfig {
@@ -1675,12 +2424,20 @@ mod tests {
             inventory_kind: ResourceKind::Network,
             selected: 0,
             filter: String::new(),
-            editing_filter: false,
+            editor: Editor::None,
             detail_focused: false,
             overlay: Overlay::None,
             confirm_scroll: 0,
             activity_scroll: 0,
             rules_scroll: 0,
+            survey,
+            configure_selected: BTreeSet::new(),
+            configure_row: 0,
+            configure_profile: PolicyProfile::Workstation,
+            configure_policy: PolicyProfile::Workstation.settings(),
+            policy_field: 0,
+            config_proposal: None,
+            prefix_input: String::new(),
             status: String::new(),
         };
         std::fs::write(&config_path, format!("{source}# changed\n")).expect("change config");
@@ -1701,6 +2458,16 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("docker-maid-tui-render-{}", std::process::id()));
         let paths = StatePaths::new(root);
+        let plan = Plan {
+            decisions: vec![sample_decision()],
+        };
+        let survey = survey_inventory(
+            &plan
+                .decisions
+                .iter()
+                .map(|decision| decision.resource.clone())
+                .collect::<Vec<_>>(),
+        );
         let mut app = App {
             explicit_config: None,
             loaded: LoadedConfig {
@@ -1711,9 +2478,7 @@ mod tests {
             built_in_config: false,
             state_paths: paths.clone(),
             protection_store: ProtectionStore::new(paths),
-            plan: Plan {
-                decisions: vec![sample_decision()],
-            },
+            plan,
             plan_id: "test-plan".to_owned(),
             plan_created_at: 1,
             config_hash: "test-config".to_owned(),
@@ -1723,12 +2488,20 @@ mod tests {
             inventory_kind: ResourceKind::Container,
             selected: 0,
             filter: String::new(),
-            editing_filter: false,
+            editor: Editor::None,
             detail_focused: false,
             overlay: Overlay::None,
             confirm_scroll: 0,
             activity_scroll: 0,
             rules_scroll: 0,
+            survey,
+            configure_selected: BTreeSet::new(),
+            configure_row: 0,
+            configure_profile: PolicyProfile::Workstation,
+            configure_policy: PolicyProfile::Workstation.settings(),
+            policy_field: 0,
+            config_proposal: None,
+            prefix_input: String::new(),
             status: "ready".to_owned(),
         };
         let backend = TestBackend::new(140, 42);

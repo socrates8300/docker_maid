@@ -14,6 +14,16 @@ deletion policy, protection, and auditability ahead of aggressive cleanup.
 
 The complete product contract is in the [PRD](PRD.md).
 
+Build the executable, then start the guided configurator:
+
+```sh
+cargo build --release
+cargo run --release -- tui
+```
+
+The TUI can create the first configuration. You do not need to hand-write TOML
+first. `cargo install --path .` installs `docker_maid` on your command path.
+
 ## Why docker_maid?
 
 Coding agents create short-lived containers, images, volumes, networks, and
@@ -43,24 +53,72 @@ There is no `--yes` flag and no direct-delete shortcut in v1.
 
 | Interface | Intended user | Contract |
 |---|---|---|
-| `docker_maid tui` | People at a terminal | Dashboard, inventory, plan review, activity, and rules |
+| `docker_maid tui` | People at a terminal | Guided configuration, dashboard, inventory, plan review, and activity |
 | Table output | People and shell scripts | Readable text with automatic color control |
 | `--format json` | Coding agents and CI | Available: versioned JSON, NDJSON streams, and machine-readable errors |
 
 All three interfaces use the same inventory, classification, planning, and
 execution core. Frontends contain no policy logic.
 
-## Available now: configuration
+## Available now: deterministic configuration
 
-Build the binary and generate, validate, or normalize a strict TOML
-configuration:
+The configurator reads Docker, finds exact ownership evidence, creates a
+reviewable proposal, and saves only after stale-state checks. It does not infer
+ownership from arbitrary names. It discovers:
+
+- known coding-agent labels;
+- exact `com.docker.compose.project` families;
+- name prefixes that the operator explicitly enters;
+- build cache as a separate authorized-unscoped choice.
+
+Unselected and unlabeled objects remain unowned. The three profiles provide
+editable starting values:
+
+| Profile | Stopped containers | Images | Volumes | Build cache after explicit opt-in |
+|---|---:|---:|---:|---:|
+| Shared Host | 24h | 7d | 14d | 30d / 20 GiB |
+| Workstation | 2h | 24h | 48h | 7d / 10 GiB |
+| Ephemeral CI | 15m | 1h | 6h | 24h / 5 GiB |
+
+Use the TUI, or run the same workflow headlessly:
 
 ```sh
-cargo build
+# Read-only discovery. Copy one or more candidate IDs.
+docker_maid config survey
 
-cargo run -- config default > docker_maid.toml
-cargo run -- config check
-cargo run -- config print
+# Create a versioned review artifact. This does not write config.
+docker_maid config propose \
+  --profile workstation \
+  --candidate compose/my-project-ab12cd34 \
+  --volume-ttl 72h \
+  --format json > proposal.json
+
+# Compare-and-swap the reviewed artifact into the default XDG config path.
+docker_maid config write --proposal proposal.json
+
+# Inspect the exact resulting removal plan. No deletion occurs.
+docker_maid plan
+```
+
+New files go to `$XDG_CONFIG_HOME/docker_maid/config.toml`, or
+`$HOME/.config/docker_maid/config.toml`. Existing explicit or loaded config
+paths stay in place. Writes use a sibling process lock, source and inventory
+hash checks, a `.bak` copy, same-directory atomic replacement, file and parent
+directory sync, mode `0700` directories, and mode `0600` files on Unix.
+
+Manual rules, comments, and ordering stay untouched. The configurator owns
+only its marked region and rule IDs under `docker-maid.configure/`. It blocks
+overlapping candidate selections and generated rules that an earlier manual
+rule would shadow.
+
+The low-level config commands remain available:
+
+```sh
+# Print a fully commented safe starter with no active cleanup rule.
+docker_maid config default
+
+docker_maid config check
+docker_maid config print
 ```
 
 Configuration lookup order is `--config <path>`, `./docker_maid.toml`, then
@@ -200,29 +258,26 @@ plan, action, summary, or recoverable-error event per line.
 cargo run --release -- tui
 ```
 
-If no configuration exists, the TUI opens in a conservative read-only mode.
-Every Docker object is unowned, so there is no deletion plan. Create a starter
-configuration when you are ready to classify agent resources:
-
-```sh
-cargo run -- config default > docker_maid.toml
-cargo run -- config check
-cargo run --release -- tui
-```
+If no configuration exists, the TUI opens **Configure** automatically. Docker
+objects remain unowned until you select exact ownership evidence.
 
 The five views use the same inventory, policy plan, protection store, executor,
 and activity journal as the non-interactive commands:
 
-1. Open **Dashboard** to inspect Docker usage and disposition counts.
-2. Open **Inventory** to inspect why each resource is owned or protected.
-3. Open **Plan** to review the fixed target set.
-4. Press `y`, inspect the confirmation modal, and press `Enter` to authorize
+1. In **Configure**, select exact agent-label or Compose families.
+2. Change the named profile with `h`/`l`. Select editable values with `[`/`]`
+   and press `e` to enter a duration or cache byte budget.
+3. Press `v` to create the real before/after plan preview.
+4. Press `s` and confirm the config-only write. The TUI refreshes **Plan**.
+5. Inspect **Inventory** to see why each object is owned or protected.
+6. In **Plan**, press `y`, inspect the confirmation, and press `Enter` to authorize
    that exact plan.
-5. Open **Activity** to inspect the resulting actions and reclaimed bytes.
+7. Open **Activity** to inspect the resulting actions and reclaimed bytes.
 
-Use `1`–`5` to switch views, `j`/`k` to move, `/` to filter, `p` to toggle
-runtime protection, `r` to refresh, `?` for help, and `q` to quit. There is no
-per-object delete key.
+Use `1`–`5` to switch views, `j`/`k` to move, `/` to filter, `c` to approve a
+name prefix from the selected inventory object, `p` to toggle runtime
+protection, `r` to refresh, `?` for help, and `q` to quit. Build cache always
+opens a dedicated unscoped-warning modal. There is no per-object delete key.
 
 The TUI refuses to start unless both stdin and stdout are terminals. It exits
 with code `4` and a one-line hint instead of waiting on a pipe. Normal exit,
@@ -295,11 +350,11 @@ The version 1 schema is additive-only and documented in
 
 ## Architecture
 
-The implemented configuration, planning, one-shot execution, daemon,
+The implemented configurator, planning, one-shot execution, daemon,
 protection-state, activity-journal, and machine-interface slices use `clap`,
-`serde`, `serde_json`, `toml`, `humantime`, `regex`, `globset`, and `fs2`. The
-Docker adapter uses `bollard` and `tokio` without shelling out. Planned runtime
-layers will use `ratatui` with `crossterm` for the TUI.
+`serde`, `serde_json`, `toml`, `toml_edit`, `humantime`, `regex`, `globset`, and `fs2`. The
+Docker adapter uses `bollard` and `tokio` without shelling out. The TUI uses
+`ratatui` and `crossterm` over the same core.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor, which rechecks the current
@@ -308,12 +363,12 @@ delete request.
 
 ## Roadmap
 
-- **M0 — Walking skeleton (in progress):** configuration, Docker inventory,
+- **M0 — Walking skeleton (implemented from source):** guided configuration, Docker inventory,
   dry-run plans, and conservative one-shot cleanup for all five resource types.
 - **M1 — Core engine (implemented from source):** durable protection, activity
   history, and interval-driven daemon execution.
-- **M2 — v0.1 interfaces:** stable machine schemas are implemented from source;
-  TUI, reports, and releases remain.
+- **M2 — v0.1 interfaces (implemented from source):** stable machine schemas
+  and the standalone TUI. Release packaging and broader CI remain.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
 
 See the [PRD milestones](PRD.md#10-milestones) for exit criteria and the full

@@ -1,13 +1,19 @@
-use clap::{error::ErrorKind, Parser, Subcommand, ValueEnum};
+use clap::{error::ErrorKind, Args, Parser, Subcommand, ValueEnum};
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
 use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
+use docker_maid::configurator::{
+    add_name_prefix_candidate, configuration_target_path, propose_configuration, survey_inventory,
+    write_proposal, ConfigProposal, ConfiguratorError, PolicyProfile, PolicySettings,
+    ProposalRequest,
+};
 use docker_maid::executor::{execute_plan, ExecutionReport};
-use docker_maid::inventory::collect_inventory;
+use docker_maid::inventory::{collect_inventory, collect_inventory_for_configuration};
 use docker_maid::machine;
 use docker_maid::plan::{build_plan_with_protection, Action, Disposition, Plan};
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use std::ffi::OsString;
 use std::fmt::Write as _;
+use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -116,6 +122,70 @@ enum ConfigCommand {
     Print,
     /// Print an annotated default configuration.
     Default,
+    /// Discover exact ownership evidence from the current Docker daemon.
+    Survey,
+    /// Build a deterministic, reviewable proposal without writing config.
+    Propose {
+        /// Safety profile for the selected ownership families.
+        #[arg(long, default_value = "workstation")]
+        profile: PolicyProfile,
+        /// Candidate ID from `config survey`; repeat to select more than one.
+        #[arg(long = "candidate", value_name = "ID")]
+        candidates: Vec<String>,
+        /// Explicit name prefix as TYPE:PREFIX; repeat as needed.
+        #[arg(long = "name-prefix", value_name = "TYPE:PREFIX")]
+        name_prefixes: Vec<String>,
+        #[command(flatten)]
+        overrides: PolicyOverrideArgs,
+    },
+    /// Write a previously reviewed JSON proposal after stale-state checks.
+    Write {
+        /// JSON proposal produced by `config propose --format json`.
+        #[arg(long, value_name = "PATH")]
+        proposal: PathBuf,
+    },
+}
+
+#[derive(Debug, Args)]
+struct PolicyOverrideArgs {
+    /// Override the stopped-container age floor.
+    #[arg(long, value_name = "DURATION")]
+    container_ttl: Option<String>,
+    /// Override the unreferenced-image age floor.
+    #[arg(long, value_name = "DURATION")]
+    image_ttl: Option<String>,
+    /// Override the orphan-volume age floor.
+    #[arg(long, value_name = "DURATION")]
+    volume_ttl: Option<String>,
+    /// Override the build-cache age floor.
+    #[arg(long, value_name = "DURATION")]
+    cache_ttl: Option<String>,
+    /// Override the build-cache retained-byte budget.
+    #[arg(long, value_name = "BYTES")]
+    cache_max_bytes: Option<u64>,
+}
+
+impl PolicyOverrideArgs {
+    fn settings(self, profile: PolicyProfile) -> Result<PolicySettings, RunError> {
+        let mut settings = profile.settings();
+        if let Some(value) = self.container_ttl {
+            settings.stopped_container_ttl = value;
+        }
+        if let Some(value) = self.image_ttl {
+            settings.image_ttl = value;
+        }
+        if let Some(value) = self.volume_ttl {
+            settings.volume_ttl = value;
+        }
+        if let Some(value) = self.cache_ttl {
+            settings.build_cache_ttl = value;
+        }
+        if let Some(value) = self.cache_max_bytes {
+            settings.build_cache_max_bytes = value;
+        }
+        settings.validate()?;
+        Ok(settings)
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -210,6 +280,7 @@ enum RunOutcome {
 #[derive(Debug)]
 enum RunError {
     Config(docker_maid::config::ConfigError),
+    Configurator(ConfiguratorError),
     Docker(docker_maid::inventory::InventoryError),
     Execution(docker_maid::executor::ExecutionError),
     State(String),
@@ -222,6 +293,12 @@ enum RunError {
 impl From<docker_maid::config::ConfigError> for RunError {
     fn from(error: docker_maid::config::ConfigError) -> Self {
         Self::Config(error)
+    }
+}
+
+impl From<ConfiguratorError> for RunError {
+    fn from(error: ConfiguratorError) -> Self {
+        Self::Configurator(error)
     }
 }
 
@@ -305,9 +382,19 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
             }
             Ok(RunOutcome::Success)
         }
-        Command::Config {
-            command: ConfigCommand::Default,
-        } => {
+        Command::Config { command } => {
+            run_config_command(cli.config.as_deref(), command, format).await
+        }
+    }
+}
+
+async fn run_config_command(
+    explicit_config: Option<&Path>,
+    command: ConfigCommand,
+    format: OutputFormat,
+) -> Result<RunOutcome, RunError> {
+    match command {
+        ConfigCommand::Default => {
             if format == OutputFormat::Json {
                 let config = Config::parse(DEFAULT_CONFIG, Path::new("<default>"))?;
                 config.validate()?;
@@ -317,40 +404,251 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
             }
             Ok(RunOutcome::Success)
         }
-        Command::Config { command } => {
-            let loaded = load_selected_config(cli.config.as_deref())?;
-
-            match command {
-                ConfigCommand::Check => {
-                    if format == OutputFormat::Json {
-                        write_json_payload(&machine::config_document(
-                            "config.check",
-                            Some(&display_path(&loaded.path)),
-                            &loaded.config,
-                        ))?;
-                    } else {
-                        let message =
-                            format!("configuration valid: {}\n", display_path(&loaded.path));
-                        write_payload(message.as_bytes())?;
-                    }
-                }
-                ConfigCommand::Print => {
-                    if format == OutputFormat::Json {
-                        write_json_payload(&machine::config_document(
-                            "config.print",
-                            Some(&display_path(&loaded.path)),
-                            &loaded.config,
-                        ))?;
-                    } else {
-                        let normalized = loaded.config.to_normalized_toml()?;
-                        write_payload(normalized.as_bytes())?;
-                    }
-                }
-                ConfigCommand::Default => unreachable!("handled without loading configuration"),
-            }
+        ConfigCommand::Survey => run_config_survey(format).await,
+        ConfigCommand::Propose {
+            profile,
+            candidates,
+            name_prefixes,
+            overrides,
+        } => {
+            let settings = overrides.settings(profile)?;
+            run_config_propose(
+                explicit_config,
+                profile,
+                &settings,
+                &candidates,
+                &name_prefixes,
+                format,
+            )
+            .await
+        }
+        ConfigCommand::Write { proposal } => run_config_write(&proposal, format).await,
+        ConfigCommand::Check | ConfigCommand::Print => {
+            let loaded = load_selected_config(explicit_config)?;
+            render_config_validation(&command, &loaded, format)?;
             Ok(RunOutcome::Success)
         }
     }
+}
+
+fn render_config_validation(
+    command: &ConfigCommand,
+    loaded: &LoadedConfig,
+    format: OutputFormat,
+) -> Result<(), RunError> {
+    match command {
+        ConfigCommand::Check if format == OutputFormat::Json => {
+            write_json_payload(&machine::config_document(
+                "config.check",
+                Some(&display_path(&loaded.path)),
+                &loaded.config,
+            ))?;
+        }
+        ConfigCommand::Check => {
+            let message = format!("configuration valid: {}\n", display_path(&loaded.path));
+            write_payload(message.as_bytes())?;
+        }
+        ConfigCommand::Print if format == OutputFormat::Json => {
+            write_json_payload(&machine::config_document(
+                "config.print",
+                Some(&display_path(&loaded.path)),
+                &loaded.config,
+            ))?;
+        }
+        ConfigCommand::Print => {
+            let normalized = loaded.config.to_normalized_toml()?;
+            write_payload(normalized.as_bytes())?;
+        }
+        _ => unreachable!("only check and print render loaded configuration"),
+    }
+    Ok(())
+}
+
+async fn run_config_survey(format: OutputFormat) -> Result<RunOutcome, RunError> {
+    let inventory = collect_inventory_for_configuration().await?;
+    let survey = survey_inventory(&inventory);
+    if format == OutputFormat::Json {
+        write_serializable_payload(&survey)?;
+    } else {
+        write_payload(render_config_survey(&survey).as_bytes())?;
+    }
+    Ok(RunOutcome::Success)
+}
+
+async fn run_config_propose(
+    explicit_config: Option<&Path>,
+    profile: PolicyProfile,
+    policy: &PolicySettings,
+    candidate_ids: &[String],
+    name_prefixes: &[String],
+    format: OutputFormat,
+) -> Result<RunOutcome, RunError> {
+    let inventory = collect_inventory_for_configuration().await?;
+    let mut survey = survey_inventory(&inventory);
+    let mut selected = candidate_ids.to_vec();
+    for specification in name_prefixes {
+        let (kind, prefix) = specification.split_once(':').ok_or_else(|| {
+            RunError::Usage(format!(
+                "--name-prefix {specification:?} must use TYPE:PREFIX"
+            ))
+        })?;
+        let kind = parse_config_resource_kind(kind)?;
+        selected.push(add_name_prefix_candidate(
+            &mut survey,
+            &inventory,
+            kind,
+            prefix,
+        )?);
+    }
+    let (source, source_existed, target_path) = configurator_base(explicit_config)?;
+    let proposal = propose_configuration(&ProposalRequest {
+        base_source: &source,
+        source_existed,
+        target_path: &target_path,
+        survey: &survey,
+        inventory: &inventory,
+        profile,
+        policy: Some(policy),
+        candidate_ids: &selected,
+        now_epoch_seconds: epoch_seconds()?,
+    })?;
+    if format == OutputFormat::Json {
+        write_serializable_payload(&proposal)?;
+    } else {
+        write_payload(render_config_proposal(&proposal).as_bytes())?;
+    }
+    Ok(RunOutcome::Success)
+}
+
+async fn run_config_write(
+    proposal_path: &Path,
+    format: OutputFormat,
+) -> Result<RunOutcome, RunError> {
+    let source = fs::read_to_string(proposal_path).map_err(|source| {
+        RunError::Configurator(ConfiguratorError::Io {
+            path: proposal_path.to_path_buf(),
+            source,
+        })
+    })?;
+    let proposal: ConfigProposal = serde_json::from_str(&source).map_err(|error| {
+        RunError::Configurator(ConfiguratorError::Invalid(format!(
+            "invalid proposal {}: {error}",
+            proposal_path.display()
+        )))
+    })?;
+    let inventory = collect_inventory_for_configuration().await?;
+    let result = write_proposal(&proposal, &inventory)?;
+    if format == OutputFormat::Json {
+        write_serializable_payload(&result)?;
+    } else {
+        let backup = result.backup_path.as_ref().map_or_else(
+            || "none (new file)".to_owned(),
+            |path| path.display().to_string(),
+        );
+        let output = format!(
+            "Configuration saved: {}\nBackup: {backup}\nProposal: {}\n",
+            result.path.display(),
+            result.proposal_id
+        );
+        write_payload(output.as_bytes())?;
+    }
+    Ok(RunOutcome::Success)
+}
+
+fn configurator_base(explicit_config: Option<&Path>) -> Result<(String, bool, PathBuf), RunError> {
+    match load_selected_config(explicit_config) {
+        Ok(loaded) => Ok((loaded.source, true, loaded.path)),
+        Err(RunError::Config(docker_maid::config::ConfigError::NotFound { .. }))
+            if explicit_config.is_none() =>
+        {
+            let target = configuration_target_path(
+                None,
+                None,
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .filter(|value| !value.is_empty())
+                    .as_deref()
+                    .map(Path::new),
+                std::env::var_os("HOME")
+                    .filter(|value| !value.is_empty())
+                    .as_deref()
+                    .map(Path::new),
+            )?;
+            Ok((String::new(), false, target))
+        }
+        Err(RunError::Config(docker_maid::config::ConfigError::Read { path, source }))
+            if explicit_config.is_some() && source.kind() == io::ErrorKind::NotFound =>
+        {
+            Ok((String::new(), false, path))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn parse_config_resource_kind(value: &str) -> Result<docker_maid::plan::ResourceKind, RunError> {
+    match value {
+        "container" => Ok(docker_maid::plan::ResourceKind::Container),
+        "image" => Ok(docker_maid::plan::ResourceKind::Image),
+        "volume" => Ok(docker_maid::plan::ResourceKind::Volume),
+        "network" => Ok(docker_maid::plan::ResourceKind::Network),
+        _ => Err(RunError::Usage(format!(
+            "unknown resource type {value:?}; expected container, image, volume, or network"
+        ))),
+    }
+}
+
+fn render_config_survey(survey: &docker_maid::configurator::ConfiguratorSurvey) -> String {
+    let mut output = format!(
+        "Docker configuration survey {}\nResources: total={}, candidates={}, unowned={}\n\n",
+        survey.snapshot_id,
+        survey.summary.total_resources,
+        survey.summary.candidate_resources,
+        survey.summary.unowned_resources
+    );
+    if survey.candidates.is_empty() {
+        output.push_str("No ownership candidates found. Unlabeled resources remain unowned.\n");
+        return output;
+    }
+    output.push_str("CANDIDATE\tRESOURCES\tBYTES\tEVIDENCE\n");
+    for candidate in &survey.candidates {
+        let _ = writeln!(
+            output,
+            "{}\t{}\t{}\t{}",
+            candidate.id,
+            candidate.resources.len(),
+            candidate.known_bytes,
+            candidate.evidence
+        );
+        if let Some(warning) = &candidate.warning {
+            let _ = writeln!(output, "  {warning}");
+        }
+    }
+    output.push_str(
+        "\nCreate a review artifact with: docker_maid config propose --profile workstation --candidate <ID> --format json\n",
+    );
+    output
+}
+
+fn render_config_proposal(proposal: &ConfigProposal) -> String {
+    let mut output = format!(
+        "Configuration proposal {}\nTarget: {}\nProfile: {}\nSelected resources: {}\nPending removals: {} -> {} ({} newly pending)\nEstimated reclaim: {} bytes\n",
+        proposal.proposal_id,
+        proposal.target_path.display(),
+        proposal.profile,
+        proposal.preview.selected_resources,
+        proposal.preview.before_pending,
+        proposal.preview.after_pending,
+        proposal.preview.newly_pending,
+        proposal.preview.estimated_reclaim_bytes
+    );
+    for warning in &proposal.warnings {
+        let _ = writeln!(output, "{warning}");
+    }
+    output.push_str("\n--- resulting configuration ---\n");
+    output.push_str(&proposal.resulting_source);
+    output.push_str(
+        "\nTo save, emit JSON to a file and run `docker_maid config write --proposal <file>`.\n",
+    );
+    output
 }
 
 async fn run_tui_command(
@@ -721,6 +1019,7 @@ fn daemon_interval(config: &Config, interval_override: Option<&str>) -> Result<D
 fn run_error_message(error: &RunError) -> String {
     match error {
         RunError::Config(error) => error.to_string(),
+        RunError::Configurator(error) => error.to_string(),
         RunError::Docker(error) => error.to_string(),
         RunError::Execution(error) => error.to_string(),
         RunError::State(error)
@@ -733,7 +1032,7 @@ fn run_error_message(error: &RunError) -> String {
 
 fn run_error_classification(error: &RunError) -> (u8, &'static str) {
     match error {
-        RunError::Config(_) => (EXIT_CONFIG, "config_invalid"),
+        RunError::Config(_) | RunError::Configurator(_) => (EXIT_CONFIG, "config_invalid"),
         RunError::Execution(docker_maid::executor::ExecutionError::State(_))
         | RunError::State(_) => (EXIT_STATE, "state_io"),
         RunError::Docker(_) | RunError::Execution(_) => (EXIT_DOCKER, "docker_unreachable"),
@@ -1010,6 +1309,11 @@ fn write_payload(payload: &[u8]) -> io::Result<()> {
 fn write_json_payload(value: &serde_json::Value) -> io::Result<()> {
     let payload = machine::to_line(value).map_err(io::Error::other)?;
     write_payload(&payload)
+}
+
+fn write_serializable_payload(value: &impl serde::Serialize) -> io::Result<()> {
+    let value = serde_json::to_value(value).map_err(io::Error::other)?;
+    write_json_payload(&value)
 }
 
 fn write_diagnostic(message: &str) {

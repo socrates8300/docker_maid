@@ -56,6 +56,33 @@ impl std::error::Error for InventoryError {
 /// Returns an error if Docker cannot be reached, a read request fails, or the
 /// daemon omits an identifier required to construct a safe plan target.
 pub async fn collect_inventory(config: &Config) -> Result<Vec<InventoryItem>, InventoryError> {
+    collect_inventory_inner(config, config.rules.build_cache.is_some(), false).await
+}
+
+/// Inventory every resource type for the interactive configurator.
+///
+/// Build-cache discovery is best effort because older daemons can omit its
+/// disk-usage field. The four owned resource types remain available in that
+/// case.
+///
+/// # Errors
+///
+/// Returns an error when Docker cannot be reached or a required owned-resource
+/// list cannot be decoded.
+pub async fn collect_inventory_for_configuration() -> Result<Vec<InventoryItem>, InventoryError> {
+    let mut config = Config::default();
+    config.rules.containers.push(crate::config::ContainerRule {
+        stopped_ttl: Some("1s".to_owned()),
+        ..crate::config::ContainerRule::default()
+    });
+    collect_inventory_inner(&config, true, true).await
+}
+
+async fn collect_inventory_inner(
+    config: &Config,
+    include_build_cache: bool,
+    optional_build_cache: bool,
+) -> Result<Vec<InventoryItem>, InventoryError> {
     let docker = Docker::connect_with_defaults().map_err(|source| InventoryError::Docker {
         operation: "connection setup".to_owned(),
         source,
@@ -74,8 +101,12 @@ pub async fn collect_inventory(config: &Config) -> Result<Vec<InventoryItem>, In
     inventory.extend(image_items(images, &references.images));
     inventory.extend(volume_items(volumes, &references.volumes));
     inventory.extend(network_items(networks, &references.networks)?);
-    if config.rules.build_cache.is_some() {
-        inventory.extend(read_build_cache(&docker).await?);
+    if include_build_cache {
+        match read_build_cache(&docker).await {
+            Ok(cache) => inventory.extend(cache),
+            Err(InventoryError::InvalidData(_)) if optional_build_cache => {}
+            Err(error) => return Err(error),
+        }
     }
     inventory.sort_by(|left, right| {
         (left.kind, &left.name, &left.id).cmp(&(right.kind, &right.name, &right.id))

@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod config;
+pub mod configurator;
 pub mod executor;
 pub mod inventory;
 pub mod machine;
