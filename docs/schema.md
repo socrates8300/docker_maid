@@ -79,6 +79,11 @@ A warning has this shape:
       "matched_rule": "agent-networks",
       "age_seconds": 120,
       "size_bytes": null,
+      "labels": {"ai-agent.owner": "example"},
+      "mounts": [],
+      "referenced": false,
+      "dangling": false,
+      "system": false,
       "reason": "matched orphan network rule"
     }
   ],
@@ -100,7 +105,11 @@ A warning has this shape:
 }
 ```
 
-`items` contains the complete inventory, not only removals. `result` is present only when `--apply` was used. Exit `1` means a dry run found pending removals. Exit `2` means an applied pass contains a skipped or failed outcome.
+`items` contains the complete inventory, not only removals. Labels, container
+mounts, reference state, dangling state, and system-resource state are included
+so headless clients can inspect the same object details as the TUI. `result` is
+present only when `--apply` was used. Exit `1` means a dry run found pending
+removals. Exit `2` means an applied pass contains a skipped or failed outcome.
 
 ## Status document
 

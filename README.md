@@ -3,12 +3,10 @@
 > Declare what agent sprawl looks like; docker_maid keeps it at zero.
 
 > [!IMPORTANT]
-> **Project status: early implementation.** Strict configuration, read-only
-> planning, and one-shot cleanup for containers, images, volumes, networks, and
-> build cache work from source. Typed runtime protection and durable cleanup
-> activity history, daemon mode, and the versioned JSON/NDJSON machine interface
-> also work from source. The TUI is not implemented or released yet. Commands in
-> planned sections do not work.
+> **Project status: alpha.** The CLI, daemon, versioned JSON/NDJSON machine
+> interface, durable protection and activity state, and interactive TUI work
+> from source. Cleanup remains dry-run unless it receives explicit CLI or TUI
+> authorization.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
 behind by coding-agent workflows. It targets one Docker host at a time and puts
@@ -32,8 +30,7 @@ ownership rules or an intentionally enabled unscoped policy.
 The deletion contract is the same in every interface:
 
 - Non-interactive commands are dry-run unless `--apply` is present.
-- The planned TUI can apply only a policy-generated, immutable plan after
-  confirmation.
+- The TUI can apply only a policy-generated, immutable plan after confirmation.
 - The protected set is the union of configuration and typed runtime state.
 - Protected resources always win over cleanup rules.
 - Every target must still match its rule immediately before deletion.
@@ -197,11 +194,24 @@ exit successfully. Applied daemon passes use `source = "daemon"` in the durable
 activity journal. With `--format json`, the daemon emits one NDJSON lifecycle,
 plan, action, summary, or recoverable-error event per line.
 
-### Planned TUI flow in 60 seconds
+## Available now: interactive TUI
 
 ```sh
-docker_maid tui
+cargo run --release -- tui
 ```
+
+If no configuration exists, the TUI opens in a conservative read-only mode.
+Every Docker object is unowned, so there is no deletion plan. Create a starter
+configuration when you are ready to classify agent resources:
+
+```sh
+cargo run -- config default > docker_maid.toml
+cargo run -- config check
+cargo run --release -- tui
+```
+
+The five views use the same inventory, policy plan, protection store, executor,
+and activity journal as the non-interactive commands:
 
 1. Open **Dashboard** to inspect Docker usage and disposition counts.
 2. Open **Inventory** to inspect why each resource is owned or protected.
@@ -210,7 +220,14 @@ docker_maid tui
    that exact plan.
 5. Open **Activity** to inspect the resulting actions and reclaimed bytes.
 
-The TUI will refuse to start unless both stdin and stdout are terminals.
+Use `1`–`5` to switch views, `j`/`k` to move, `/` to filter, `p` to toggle
+runtime protection, `r` to refresh, `?` for help, and `q` to quit. There is no
+per-object delete key.
+
+The TUI refuses to start unless both stdin and stdout are terminals. It exits
+with code `4` and a one-line hint instead of waiting on a pipe. Normal exit,
+handled termination signals, and panics restore raw mode and the alternate
+screen.
 
 ## Configuration
 

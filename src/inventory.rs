@@ -170,6 +170,7 @@ fn build_cache_items(records: Vec<BuildCache>) -> Result<Vec<InventoryItem>, Inv
                 search_names,
                 parent_ids,
                 labels: BTreeMap::new(),
+                mounts: Vec::new(),
                 state: ResourceState::Other(cache_type),
                 created_at,
                 state_since,
@@ -301,6 +302,22 @@ fn container_items(
             |snapshot| resource_state(&snapshot.state),
         );
         let state_since = snapshot.and_then(|snapshot| snapshot.since);
+        let mounts = container
+            .mounts
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mount| {
+                let source = mount
+                    .name
+                    .or(mount.source)
+                    .unwrap_or_else(|| "-".to_owned());
+                let destination = mount.destination.unwrap_or_else(|| "-".to_owned());
+                let kind = mount.typ.unwrap_or_else(|| "mount".to_owned());
+                let access = if mount.rw == Some(false) { "ro" } else { "rw" };
+                format!("{source} → {destination} ({kind}, {access})")
+            })
+            .collect();
 
         inventory.push(InventoryItem {
             kind: ResourceKind::Container,
@@ -309,6 +326,7 @@ fn container_items(
             search_names,
             parent_ids: Vec::new(),
             labels: to_btree(container.labels.clone().unwrap_or_default()),
+            mounts,
             state,
             created_at: container.created,
             state_since,
@@ -345,6 +363,7 @@ fn image_items(
             search_names,
             parent_ids: Vec::new(),
             labels: to_btree(image.labels),
+            mounts: Vec::new(),
             state: ResourceState::Available,
             created_at: Some(image.created),
             state_since: None,
@@ -368,6 +387,7 @@ fn volume_items(volumes: Vec<Volume>, referenced_volumes: &HashSet<String>) -> V
             search_names: vec![name.clone()],
             parent_ids: Vec::new(),
             labels: to_btree(volume.labels),
+            mounts: Vec::new(),
             state: ResourceState::Available,
             created_at: volume.created_at.as_deref().and_then(rfc3339_epoch),
             state_since: None,
@@ -405,6 +425,7 @@ fn network_items(
             search_names,
             parent_ids: Vec::new(),
             labels: to_btree(network.labels.unwrap_or_default()),
+            mounts: Vec::new(),
             state: ResourceState::Available,
             created_at: network.created.as_deref().and_then(rfc3339_epoch),
             state_since: None,

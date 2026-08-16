@@ -186,51 +186,60 @@ impl ActivityJournal {
     ///
     /// Returns an error when existing journal data cannot be read or parsed.
     pub fn last_completed_pass(&self) -> Result<Option<CompletedPass>, ActivityError> {
+        Ok(self.completed_passes()?.pop())
+    }
+
+    /// Read every completed pass in chronological completion order.
+    ///
+    /// Incomplete passes are ignored. This is the shared history surface used
+    /// by interactive frontends; callers never parse the JSONL files directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when existing journal data cannot be read or parsed.
+    pub fn completed_passes(&self) -> Result<Vec<CompletedPass>, ActivityError> {
         let events = self.snapshot()?;
-        let Some(summary) = events
-            .iter()
-            .rev()
-            .find(|event| matches!(event.data, EventData::PassSummary { .. }))
-        else {
-            return Ok(None);
-        };
-        let pass_id = summary.pass_id.clone();
-        let started_at = events
-            .iter()
-            .find(|event| event.pass_id == pass_id && matches!(event.data, EventData::PassStarted))
-            .map_or(summary.timestamp, |event| event.timestamp);
-        let mut actions = events
-            .iter()
-            .filter(|event| {
-                event.pass_id == pass_id && matches!(event.data, EventData::Action { .. })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        actions.sort_by_key(|event| event.sequence);
-        let EventData::PassSummary {
-            completed_at,
-            rule_match_counts,
-            removed_count,
-            skipped_count,
-            failure_count,
-            reclaimed_bytes,
-        } = &summary.data
-        else {
-            unreachable!("selected a pass summary")
-        };
-        Ok(Some(CompletedPass {
-            pass_id,
-            source: summary.source.clone(),
-            started_at,
-            completed_at: *completed_at,
-            config_hash: summary.config_hash.clone(),
-            actions,
-            rule_match_counts: rule_match_counts.clone(),
-            removed_count: *removed_count,
-            skipped_count: *skipped_count,
-            failure_count: *failure_count,
-            reclaimed_bytes: *reclaimed_bytes,
-        }))
+        let mut starts = BTreeMap::<String, i64>::new();
+        let mut actions = BTreeMap::<String, Vec<ActivityEvent>>::new();
+        let mut completed = Vec::new();
+        for event in events {
+            match &event.data {
+                EventData::PassStarted => {
+                    starts.insert(event.pass_id.clone(), event.timestamp);
+                }
+                EventData::Action { .. } => {
+                    actions
+                        .entry(event.pass_id.clone())
+                        .or_default()
+                        .push(event);
+                }
+                EventData::PassSummary {
+                    completed_at,
+                    rule_match_counts,
+                    removed_count,
+                    skipped_count,
+                    failure_count,
+                    reclaimed_bytes,
+                } => {
+                    let mut pass_actions = actions.remove(&event.pass_id).unwrap_or_default();
+                    pass_actions.sort_by_key(|action| action.sequence);
+                    completed.push(CompletedPass {
+                        pass_id: event.pass_id.clone(),
+                        source: event.source.clone(),
+                        started_at: starts.remove(&event.pass_id).unwrap_or(event.timestamp),
+                        completed_at: *completed_at,
+                        config_hash: event.config_hash.clone(),
+                        actions: pass_actions,
+                        rule_match_counts: rule_match_counts.clone(),
+                        removed_count: *removed_count,
+                        skipped_count: *skipped_count,
+                        failure_count: *failure_count,
+                        reclaimed_bytes: *reclaimed_bytes,
+                    });
+                }
+            }
+        }
+        Ok(completed)
     }
 
     fn append(&self, event: &ActivityEvent) -> Result<(), ActivityError> {
@@ -568,6 +577,7 @@ mod tests {
             search_names: vec!["volume-one".to_owned()],
             parent_ids: Vec::new(),
             labels: BTreeMap::new(),
+            mounts: Vec::new(),
             state: ResourceState::Available,
             created_at: Some(1),
             state_since: None,

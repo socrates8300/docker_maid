@@ -116,16 +116,14 @@ impl ProtectionState {
     /// Return the runtime protection reason for an inventory item.
     #[must_use]
     pub fn match_reason(&self, item: &InventoryItem) -> Option<String> {
-        self.entries.iter().find_map(|entry| {
-            if entry_matches(entry, item) {
-                Some(format!(
-                    "matched runtime protection {} {}",
-                    entry.kind, entry.value
-                ))
-            } else {
-                None
-            }
-        })
+        self.matching_entry(item)
+            .map(|entry| format!("matched runtime protection {} {}", entry.kind, entry.value))
+    }
+
+    /// Return the first persisted runtime entry protecting an inventory item.
+    #[must_use]
+    pub fn matching_entry(&self, item: &InventoryItem) -> Option<&ProtectionEntry> {
+        self.entries.iter().find(|entry| entry_matches(entry, item))
     }
 }
 
@@ -487,6 +485,7 @@ mod tests {
             search_names: vec![name.to_owned()],
             parent_ids: Vec::new(),
             labels: BTreeMap::new(),
+            mounts: Vec::new(),
             state: crate::plan::ResourceState::Available,
             created_at: None,
             state_since: None,

@@ -1,0 +1,7 @@
+[[rules.networks]]
+name = "tui-probe"
+orphan = true
+select.names = ["^docker-maid-tui-probe$"]
+
+[tui]
+refresh = "5m"

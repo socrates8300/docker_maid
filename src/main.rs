@@ -8,14 +8,17 @@ use docker_maid::plan::{build_plan_with_protection, Action, Disposition, Plan};
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use std::ffi::OsString;
 use std::fmt::Write as _;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod tui;
+
 const EXIT_PENDING: u8 = 1;
 const EXIT_PARTIAL: u8 = 2;
 const EXIT_CONFIG: u8 = 3;
+const EXIT_TTY: u8 = 4;
 const EXIT_DOCKER: u8 = 5;
 const EXIT_STATE: u8 = 6;
 const EXIT_INTERNAL: u8 = 7;
@@ -30,8 +33,8 @@ struct Cli {
     config: Option<PathBuf>,
 
     /// Select human-readable tables or the stable machine schema.
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Table)]
-    format: OutputFormat,
+    #[arg(long, global = true, value_enum)]
+    format: Option<OutputFormat>,
 
     /// Alias for --format json.
     #[arg(long, global = true, conflicts_with = "format")]
@@ -46,7 +49,7 @@ impl Cli {
         if self.json {
             OutputFormat::Json
         } else {
-            self.format
+            self.format.unwrap_or(OutputFormat::Table)
         }
     }
 }
@@ -59,6 +62,12 @@ enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Open the interactive terminal dashboard.
+    Tui {
+        /// Reserved for P1 daemon IPC; currently unavailable.
+        #[arg(long)]
+        attach: bool,
+    },
     /// Print the policy-derived dry-run plan without changing Docker.
     Plan,
     /// Run one policy-derived cleanup pass; mutation requires --apply.
@@ -153,7 +162,11 @@ async fn main() -> ExitCode {
             return ExitCode::from(EXIT_USAGE);
         }
     };
-    let format = cli.output_format();
+    let format = if matches!(cli.command, Command::Tui { .. }) {
+        OutputFormat::Table
+    } else {
+        cli.output_format()
+    };
 
     match run(cli, format).await {
         Ok(RunOutcome::Success) => ExitCode::SUCCESS,
@@ -200,6 +213,7 @@ enum RunError {
     Docker(docker_maid::inventory::InventoryError),
     Execution(docker_maid::executor::ExecutionError),
     State(String),
+    Tty(String),
     Usage(String),
     Internal(String),
     Output(io::Error),
@@ -242,7 +256,11 @@ impl From<docker_maid::activity::ActivityError> for RunError {
 }
 
 async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
+    let machine_format_requested = cli.format.is_some() || cli.json;
     match cli.command {
+        Command::Tui { attach } => {
+            run_tui_command(cli.config.as_deref(), machine_format_requested, attach).await
+        }
         Command::Plan => run_cleanup(cli.config.as_deref(), false, false, format).await,
         Command::Clean { apply } => run_cleanup(cli.config.as_deref(), true, apply, format).await,
         Command::Daemon { apply, interval } => {
@@ -333,6 +351,30 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
             Ok(RunOutcome::Success)
         }
     }
+}
+
+async fn run_tui_command(
+    explicit_config: Option<&Path>,
+    machine_format_requested: bool,
+    attach: bool,
+) -> Result<RunOutcome, RunError> {
+    if machine_format_requested {
+        return Err(RunError::Usage(
+            "tui does not accept --format or --json".to_owned(),
+        ));
+    }
+    if attach {
+        return Err(RunError::Usage(
+            "tui --attach is not available yet; run standalone tui".to_owned(),
+        ));
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(RunError::Tty(
+            "tui requires both stdin and stdout to be terminals; use status --format json for headless use"
+                .to_owned(),
+        ));
+    }
+    tui::run(explicit_config).await
 }
 
 async fn run_cleanup(
@@ -681,9 +723,10 @@ fn run_error_message(error: &RunError) -> String {
         RunError::Config(error) => error.to_string(),
         RunError::Docker(error) => error.to_string(),
         RunError::Execution(error) => error.to_string(),
-        RunError::State(error) | RunError::Usage(error) | RunError::Internal(error) => {
-            error.clone()
-        }
+        RunError::State(error)
+        | RunError::Tty(error)
+        | RunError::Usage(error)
+        | RunError::Internal(error) => error.clone(),
         RunError::Output(error) => format!("cannot write stdout: {error}"),
     }
 }
@@ -694,6 +737,7 @@ fn run_error_classification(error: &RunError) -> (u8, &'static str) {
         RunError::Execution(docker_maid::executor::ExecutionError::State(_))
         | RunError::State(_) => (EXIT_STATE, "state_io"),
         RunError::Docker(_) | RunError::Execution(_) => (EXIT_DOCKER, "docker_unreachable"),
+        RunError::Tty(_) => (EXIT_TTY, "tty_required"),
         RunError::Usage(_) => (EXIT_USAGE, "usage"),
         RunError::Internal(_) | RunError::Output(_) => (EXIT_INTERNAL, "internal"),
     }

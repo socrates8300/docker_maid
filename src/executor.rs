@@ -483,6 +483,7 @@ mod tests {
                 search_names: vec!["volume-1".to_owned()],
                 parent_ids: Vec::new(),
                 labels: BTreeMap::new(),
+                mounts: Vec::new(),
                 state: ResourceState::Available,
                 created_at: Some(1),
                 state_since: None,

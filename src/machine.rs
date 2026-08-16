@@ -211,6 +211,11 @@ fn plan_items(plan: &Plan) -> Vec<Value> {
                 "matched_rule": decision.matched_rule,
                 "age_seconds": decision.age_seconds,
                 "size_bytes": decision.resource.size,
+                "labels": decision.resource.labels,
+                "mounts": decision.resource.mounts,
+                "referenced": decision.resource.referenced,
+                "dangling": decision.resource.dangling,
+                "system": decision.resource.system,
                 "reason": decision.reason,
             })
         })
