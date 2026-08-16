@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn binary() -> &'static str {
@@ -16,13 +17,19 @@ fn fixture_config() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/read_only_plan.toml")
 }
 
+/// These tests run concurrently in one process, and the system clock can
+/// report the same microsecond for two of them. A counter keeps every root
+/// distinct so one test never deletes another's directory.
+static NEXT_ROOT_ID: AtomicU64 = AtomicU64::new(0);
+
 fn temp_dir(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock after epoch")
         .as_nanos();
+    let sequence = NEXT_ROOT_ID.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "docker-maid-daemon-{label}-{}-{nonce}",
+        "docker-maid-daemon-{label}-{}-{nonce}-{sequence}",
         std::process::id()
     ));
     fs::create_dir_all(&path).expect("create daemon test directory");
@@ -125,7 +132,7 @@ fn live_config(label: &str, protected_name: Option<&str>) -> String {
         format!("[protect]\nnames = ['^{name}$']\n\n")
     });
     format!(
-        "[defaults]\ninterval = '30s'\n\n{protection}[[rules.networks]]\nname = 'daemon-live'\nselect.labels = ['docker-maid.daemon={label}']\norphan = true\n"
+        "[defaults]\ninterval = '30s'\n\n{protection}[[rules.networks]]\nname = 'daemon-live'\nselect.labels = ['docker-maid.daemon={label}']\norphan = true\norphan_for = '1s'\n"
     )
 }
 
@@ -141,6 +148,26 @@ async fn create_network(docker: &Docker, name: &str, label: &str) {
         })
         .await
         .expect("create daemon live network");
+}
+
+/// Start the observed-unreferenced clock for fresh fixtures and wait past the
+/// one-second floor, so the daemon's first pass has a measurement to act on.
+async fn observe_past_floor(config: &Path, state_home: &Path) {
+    let output = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 live config path"),
+            "plan",
+        ])
+        .env("XDG_STATE_HOME", state_home)
+        .output()
+        .expect("run warm-up plan");
+    assert!(
+        output.status.success() || output.status.code() == Some(1),
+        "warm-up plan failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
 }
 
 async fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
@@ -194,6 +221,7 @@ async fn live_daemon_reloads_on_sighup_applies_and_stops_on_sigterm() {
 
     create_network(&docker, &first, &label).await;
     fs::write(&config, live_config(&label, None)).expect("write daemon config");
+    observe_past_floor(&config, &state_home).await;
     let child = Command::new(binary())
         .args([
             "--config",
@@ -225,6 +253,9 @@ async fn live_daemon_reloads_on_sighup_applies_and_stops_on_sigterm() {
     let protected_survived = docker.inspect_network(&reloaded, None).await.is_ok();
 
     fs::write(&config, live_config(&label, None)).expect("remove config protection");
+    // The reloaded network's observed clock started on the pass above, so wait
+    // past the one-second floor before asking for the pass that removes it.
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
     send_signal(&child, "HUP");
     wait_for_network_removal(&docker, &reloaded, Duration::from_secs(5)).await;
 
@@ -274,6 +305,7 @@ async fn live_sigterm_drains_the_active_pass_before_exit() {
     let state_home = root.join("state");
     let journal_path = state_home.join("docker_maid/activity.jsonl");
     fs::write(&config, live_config(&label, None)).expect("write drain config");
+    observe_past_floor(&config, &state_home).await;
     let child = Command::new(binary())
         .args([
             "--config",

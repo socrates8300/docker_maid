@@ -14,7 +14,13 @@ use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// These tests run concurrently in one process, and the system clock can
+/// report the same microsecond for two of them. A counter keeps every root
+/// distinct so one test never deletes another's directory.
+static NEXT_ROOT_ID: AtomicU64 = AtomicU64::new(0);
 
 fn live_test_enabled() -> bool {
     std::env::var_os("DOCKER_MAID_LIVE_TEST").is_some()
@@ -26,12 +32,13 @@ fn binary() -> &'static str {
 
 fn temp_dir() -> PathBuf {
     let suffix = format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
-            .as_nanos()
+            .as_nanos(),
+        NEXT_ROOT_ID.fetch_add(1, Ordering::Relaxed)
     );
     let path = std::env::temp_dir().join(format!("docker-maid-executor-live-{suffix}"));
     fs::create_dir_all(&path).expect("create live test directory");
@@ -52,7 +59,7 @@ fn network_config(rule_label: &str, protected_name: Option<&str>) -> String {
         format!("[protect]\nnames = ['^{name}$']\n\n")
     });
     format!(
-        "{protection}[[rules.networks]]\nname = 'live-race'\nselect.labels = ['docker-maid.live={rule_label}']\norphan = true\n"
+        "{protection}[[rules.networks]]\nname = 'live-race'\nselect.labels = ['docker-maid.live={rule_label}']\norphan = true\norphan_for = '1s'\n"
     )
 }
 
@@ -133,6 +140,29 @@ fn assert_one_skip(report: &ExecutionReport, detail: &str) {
     assert_eq!(report.outcomes.len(), 1);
     assert_eq!(report.outcomes[0].status, TargetStatus::Skipped);
     assert!(report.outcomes[0].detail.contains(detail));
+}
+
+/// Start the observed-unreferenced clock for a fresh fixture and wait past the
+/// one-second floor, so the applied pass has a measurement to act on.
+async fn observe_past_floor(config: &Path) {
+    let output = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 live config path"),
+            "plan",
+        ])
+        .env(
+            "XDG_STATE_HOME",
+            config.parent().expect("live config parent").join("state"),
+        )
+        .output()
+        .expect("run live plan");
+    assert!(
+        output.status.success() || output.status.code() == Some(1),
+        "warm-up plan failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
 }
 
 fn run_applied_with_stdout(config: &Path, stdout: impl Into<Stdio>) -> Output {
@@ -285,6 +315,7 @@ async fn live_cleanup_keeps_output_failures_deterministic() {
     let epipe_config = root.join("epipe.toml");
     create_network(&docker, &epipe_network, &epipe_label).await;
     fs::write(&epipe_config, network_config(&epipe_label, None)).expect("write EPIPE config");
+    observe_past_floor(&epipe_config).await;
     let (reader, writer) = os_pipe::pipe().expect("create closed-reader pipe");
     drop(reader);
     let epipe_output = run_applied_with_stdout(&epipe_config, Stdio::from(writer));
@@ -299,6 +330,7 @@ async fn live_cleanup_keeps_output_failures_deterministic() {
         create_network(&docker, &full_network, &full_label).await;
         fs::write(&full_config, network_config(&full_label, None))
             .expect("write full-device config");
+        observe_past_floor(&full_config).await;
         let full = File::options()
             .write(true)
             .open("/dev/full")
@@ -318,4 +350,48 @@ async fn live_cleanup_keeps_output_failures_deterministic() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("cannot write stdout"));
         assert!(removed, "/dev/full target was not removed");
     }
+}
+
+#[tokio::test]
+async fn live_delete_time_revalidation_honors_a_new_label_protection() {
+    if !live_test_enabled() {
+        return;
+    }
+
+    let docker = Docker::connect_with_defaults().expect("connect to live Docker");
+    let root = temp_dir();
+    let unique = root.file_name().expect("temporary name").to_string_lossy();
+    let network = format!("{unique}-label-protected");
+    let label = format!("{unique}-label-protection");
+    let config_path = root.join("label-protected.toml");
+    create_network(&docker, &network, &label).await;
+    fs::write(&config_path, network_config(&label, None)).expect("write label protection config");
+    let (initial_config, initial_source, plan, observations) = capture_plan(&config_path).await;
+    assert_network_target(&plan, &network);
+
+    // The plan already targets this network. Protecting its family afterwards
+    // must still stop the delete, because the executor revalidates.
+    let store = ProtectionStore::new(StatePaths::new(root.join("label-state")));
+    store
+        .add(
+            ProtectionKind::Label,
+            &[format!("docker-maid.live={label}")],
+        )
+        .expect("persist label protection");
+    let report = execute_plan(
+        &config_path,
+        &initial_config,
+        &initial_source,
+        &plan,
+        &store,
+        &observations,
+    )
+    .await
+    .expect("execute label-protected plan");
+    let still_exists = docker.inspect_network(&network, None).await.is_ok();
+
+    let _ = docker.remove_network(&network).await;
+    fs::remove_dir_all(root).expect("remove live test directory");
+    assert!(still_exists, "newly label-protected network was deleted");
+    assert_one_skip(&report, "runtime protection");
 }

@@ -5,7 +5,6 @@ use crate::config::{
     BuildCacheRule, CommonRule, Config, ConfigError, ContainerRule, ImageRule, NetworkRule,
     RuleScope, Rules, Selectors, VolumeRule,
 };
-use crate::observation::ObservationState;
 use crate::plan::{
     build_plan_with_context, Action, InventoryItem, PlanContext, ResourceKind, ResourceState,
 };
@@ -277,7 +276,7 @@ pub fn refresh_candidate_warnings(
     policy: &PolicySettings,
     inventory: &[InventoryItem],
     now_epoch_seconds: i64,
-    observations: &ObservationState,
+    context: &PlanContext<'_>,
 ) {
     for candidate in &mut survey.candidates {
         if is_compose_candidate(candidate) {
@@ -286,7 +285,7 @@ pub fn refresh_candidate_warnings(
                 policy,
                 inventory,
                 now_epoch_seconds,
-                observations,
+                context,
             ));
         }
     }
@@ -343,7 +342,7 @@ pub struct ProposalRequest<'a> {
     pub policy: Option<&'a PolicySettings>,
     pub candidate_ids: &'a [String],
     pub now_epoch_seconds: i64,
-    pub observations: &'a ObservationState,
+    pub context: PlanContext<'a>,
 }
 
 #[derive(Default)]
@@ -413,6 +412,27 @@ pub fn survey_inventory(inventory: &[InventoryItem]) -> ConfiguratorSurvey {
     }
 
     finish_survey(inventory, groups)
+}
+
+/// Return the canonical ownership-family label carried by one resource.
+///
+/// This is the same evidence [`survey_inventory`] turns into a candidate, so a
+/// protect-this-family action and a generated rule always speak about the same
+/// family. A Compose project wins over an agent label, and agent labels are
+/// resolved in key order, so the answer never depends on iteration luck.
+#[must_use]
+pub fn family_label(item: &InventoryItem) -> Option<(&str, &str)> {
+    let compose = item
+        .labels
+        .get_key_value("com.docker.compose.project")
+        .filter(|(_, value)| !value.trim().is_empty());
+    compose
+        .or_else(|| {
+            item.labels
+                .iter()
+                .find(|(key, _)| is_agent_label(key.as_str()))
+        })
+        .map(|(key, value)| (key.as_str(), value.as_str()))
 }
 
 /// Add an operator-chosen name prefix to an existing survey.
@@ -514,7 +534,7 @@ pub fn propose_configuration(
         policy,
         candidate_ids,
         now_epoch_seconds,
-        observations,
+        context,
     } = *request;
     let policy = policy.cloned().unwrap_or_else(|| profile.settings());
     policy.validate()?;
@@ -564,15 +584,10 @@ pub fn propose_configuration(
         now_epoch_seconds,
         &selected,
         &generated_rule_ids,
-        observations,
+        &context,
     )?;
-    let warnings = selected_candidate_warnings(
-        &selected,
-        &policy,
-        inventory,
-        now_epoch_seconds,
-        observations,
-    );
+    let warnings =
+        selected_candidate_warnings(&selected, &policy, inventory, now_epoch_seconds, &context);
     let inventory_signature = inventory_signature(inventory);
     let mut sorted_candidate_ids = selected_ids.into_iter().collect::<Vec<_>>();
     sorted_candidate_ids.sort();
@@ -716,17 +731,13 @@ fn proposal_preview(
     now_epoch_seconds: i64,
     selected: &[&CandidateFamily],
     generated_rule_ids: &[String],
-    observations: &ObservationState,
+    context: &PlanContext<'_>,
 ) -> Result<ProposalPreview, ConfiguratorError> {
-    let context = PlanContext {
-        observations,
-        ..PlanContext::default()
-    };
     let before = build_plan_with_context(
         manual_config,
         inventory.to_vec(),
         now_epoch_seconds,
-        &context,
+        context,
     )
     .map_err(|error| {
         ConfiguratorError::Invalid(format!("cannot preview current policy: {error}"))
@@ -735,12 +746,28 @@ fn proposal_preview(
         result_config,
         inventory.to_vec(),
         now_epoch_seconds,
-        &context,
+        context,
     )
     .map_err(|error| {
         ConfiguratorError::Invalid(format!("cannot preview proposed policy: {error}"))
     })?;
-    reject_shadowed_rules(selected, generated_rule_ids, &after)?;
+    // Shadowing is a question about rule precedence inside the configuration,
+    // so it is asked of a protection-free plan. Runtime protection short-
+    // circuits rule matching, and reading that as "an earlier manual rule
+    // claimed this" would refuse a sound proposal for a protected family.
+    let shadow_probe = build_plan_with_context(
+        result_config,
+        inventory.to_vec(),
+        now_epoch_seconds,
+        &PlanContext {
+            observations: context.observations,
+            ..PlanContext::default()
+        },
+    )
+    .map_err(|error| {
+        ConfiguratorError::Invalid(format!("cannot preview proposed policy: {error}"))
+    })?;
+    reject_shadowed_rules(selected, generated_rule_ids, &shadow_probe)?;
     let before_ids = pending_ids(&before);
     let after_targets = after
         .decisions
@@ -906,7 +933,7 @@ fn selected_candidate_warnings(
     policy: &PolicySettings,
     inventory: &[InventoryItem],
     now_epoch_seconds: i64,
-    observations: &ObservationState,
+    context: &PlanContext<'_>,
 ) -> Vec<String> {
     selected
         .iter()
@@ -917,7 +944,7 @@ fn selected_candidate_warnings(
                     policy,
                     inventory,
                     now_epoch_seconds,
-                    observations,
+                    context,
                 ))
             } else {
                 candidate.warning.clone()
@@ -931,7 +958,7 @@ fn compose_future_cleanup_warning(
     policy: &PolicySettings,
     inventory: &[InventoryItem],
     now_epoch_seconds: i64,
-    observations: &ObservationState,
+    context: &PlanContext<'_>,
 ) -> String {
     let mut rules = Rules::default();
     if append_candidate_rules(&mut rules, candidate, policy).is_err() {
@@ -947,10 +974,7 @@ fn compose_future_cleanup_warning(
         &family_config,
         inventory.to_vec(),
         now_epoch_seconds,
-        &PlanContext {
-            observations,
-            ..PlanContext::default()
-        },
+        context,
     ) else {
         return "WARNING: This Compose family has an invalid generated rule shape; do not write it"
             .to_owned();
@@ -1481,8 +1505,15 @@ mod tests {
 
     /// Treat every unreferenced resource as first observed at epoch zero, so a
     /// test's `now_epoch_seconds` is the full observed-unreferenced age.
-    fn observations(inventory: &[InventoryItem]) -> ObservationState {
-        ObservationState::default().folded(inventory, 0)
+    fn observations(inventory: &[InventoryItem]) -> crate::observation::ObservationState {
+        crate::observation::ObservationState::default().folded(inventory, 0)
+    }
+
+    fn context(observations: &crate::observation::ObservationState) -> PlanContext<'_> {
+        PlanContext {
+            observations,
+            ..PlanContext::default()
+        }
     }
 
     fn item(kind: ResourceKind, id: &str, name: &str, labels: &[(&str, &str)]) -> InventoryItem {
@@ -1535,7 +1566,7 @@ mod tests {
             &PolicyProfile::Workstation.settings(),
             &inventory,
             10_000,
-            &observations(&inventory),
+            &context(&observations(&inventory)),
         );
         let warning = survey.candidates[0]
             .warning
@@ -1622,7 +1653,7 @@ mod tests {
             &policy,
             &inventory,
             10_000,
-            &observations(&inventory),
+            &context(&observations(&inventory)),
         );
 
         let candidate = &survey.candidates[0];
@@ -1642,7 +1673,7 @@ mod tests {
             policy: Some(&policy),
             candidate_ids: std::slice::from_ref(&candidate.id),
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         assert_eq!(proposal.preview.after_pending, 0);
@@ -1671,7 +1702,7 @@ mod tests {
             &policy,
             &inventory,
             1_000_000,
-            &observations(&inventory),
+            &context(&observations(&inventory)),
         );
 
         let candidate = &survey.candidates[0];
@@ -1692,7 +1723,7 @@ mod tests {
             policy: Some(&policy),
             candidate_ids: std::slice::from_ref(&candidate.id),
             now_epoch_seconds: 1_000_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         assert_eq!(proposal.preview.after_pending, 2);
@@ -1713,7 +1744,7 @@ mod tests {
             &PolicyProfile::SharedHost.settings(),
             &inventory,
             10_000,
-            &observations(&inventory),
+            &context(&observations(&inventory)),
         );
         let survey_warning = survey.candidates[0]
             .warning
@@ -1730,7 +1761,7 @@ mod tests {
             policy: None,
             candidate_ids: &[survey.candidates[0].id.clone()],
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         assert_eq!(proposal.warnings, vec![survey_warning]);
@@ -1757,7 +1788,7 @@ mod tests {
             policy: None,
             candidate_ids: &ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         let second = propose_configuration(&ProposalRequest {
@@ -1770,7 +1801,7 @@ mod tests {
             policy: None,
             candidate_ids: &ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         assert_eq!(first, second);
@@ -1806,7 +1837,7 @@ mod tests {
             policy: None,
             candidate_ids: &ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect_err("overlap");
         assert!(error.to_string().contains("overlap"));
@@ -1832,7 +1863,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         assert!(
@@ -1872,7 +1903,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("proposal");
         let mut changed_inventory = inventory.clone();
@@ -1916,7 +1947,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("first proposal");
         let first_write = write_proposal(&first, &inventory).expect("first write");
@@ -1935,7 +1966,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
-            observations: &observations(&inventory),
+            context: context(&observations(&inventory)),
         })
         .expect("second proposal");
         let second_write = write_proposal(&second, &inventory).expect("second write");
@@ -1962,5 +1993,140 @@ mod tests {
             );
         }
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn family_label_prefers_compose_then_resolves_agent_labels_in_key_order() {
+        let compose = item(
+            ResourceKind::Volume,
+            "v1",
+            "data",
+            &[
+                ("ai-agent.owner", "example"),
+                ("com.docker.compose.project", "immich"),
+            ],
+        );
+        assert_eq!(
+            family_label(&compose),
+            Some(("com.docker.compose.project", "immich"))
+        );
+
+        let agent = item(
+            ResourceKind::Volume,
+            "v2",
+            "data",
+            &[("devcontainer.local_folder", "/w"), ("ai-agent.owner", "x")],
+        );
+        assert_eq!(family_label(&agent), Some(("ai-agent.owner", "x")));
+
+        // A blank Compose project is not evidence of a family.
+        let blank = item(
+            ResourceKind::Volume,
+            "v3",
+            "data",
+            &[("com.docker.compose.project", "  ")],
+        );
+        assert_eq!(family_label(&blank), None);
+        assert_eq!(
+            family_label(&item(ResourceKind::Volume, "v4", "d", &[])),
+            None
+        );
+    }
+
+    #[test]
+    fn a_protected_family_is_not_counted_as_pending_by_the_preview() {
+        let inventory = vec![
+            item(
+                ResourceKind::Container,
+                "c1",
+                "project-web",
+                &[("com.docker.compose.project", "project")],
+            ),
+            item(
+                ResourceKind::Volume,
+                "v1",
+                "project-data",
+                &[("com.docker.compose.project", "project")],
+            ),
+        ];
+        let policy = PolicyProfile::Workstation.settings();
+        let observed = observations(&inventory);
+        let protection = crate::state::ProtectionState {
+            schema_version: 2,
+            entries: vec![crate::state::ProtectionEntry {
+                kind: crate::state::ProtectionKind::Label,
+                value: "com.docker.compose.project=project".to_owned(),
+            }],
+        };
+        let protected = PlanContext {
+            protection: &protection,
+            observations: &observed,
+        };
+
+        let mut survey = survey_inventory(&inventory);
+        refresh_candidate_warnings(&mut survey, &policy, &inventory, 1_000_000, &protected);
+        let candidate = &survey.candidates[0];
+        let warning = candidate.warning.as_deref().expect("Compose warning");
+        // The same fixture and clock preview 2 pending removals unprotected.
+        assert!(!warning.contains("currently previews"), "{warning}");
+
+        let proposal = propose_configuration(&ProposalRequest {
+            base_source: "",
+            source_existed: false,
+            target_path: Path::new("config.toml"),
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::Workstation,
+            policy: Some(&policy),
+            candidate_ids: std::slice::from_ref(&candidate.id),
+            now_epoch_seconds: 1_000_000,
+            context: protected,
+        })
+        .expect("proposal");
+        assert_eq!(proposal.preview.after_pending, 0);
+        assert_eq!(proposal.preview.newly_pending, 0);
+    }
+
+    #[test]
+    fn protection_does_not_hide_a_genuine_manual_rule_shadow() {
+        let inventory = vec![item(
+            ResourceKind::Volume,
+            "v1",
+            "project-data",
+            &[("com.docker.compose.project", "project")],
+        )];
+        let policy = PolicyProfile::Workstation.settings();
+        let observed = observations(&inventory);
+        let protection = crate::state::ProtectionState {
+            schema_version: 2,
+            entries: vec![crate::state::ProtectionEntry {
+                kind: crate::state::ProtectionKind::Label,
+                value: "com.docker.compose.project=project".to_owned(),
+            }],
+        };
+        let survey = survey_inventory(&inventory);
+        // A manual rule already claims the same volumes, which is a real
+        // shadow. Protecting the family must not make that refusal disappear.
+        let manual = "[[rules.volumes]]\nname = 'manual'\nselect.labels = ['com.docker.compose.project=project']\norphan_for = '1h'\n";
+        let error = propose_configuration(&ProposalRequest {
+            base_source: manual,
+            source_existed: true,
+            target_path: Path::new("config.toml"),
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::Workstation,
+            policy: Some(&policy),
+            candidate_ids: std::slice::from_ref(&survey.candidates[0].id),
+            now_epoch_seconds: 1_000_000,
+            context: PlanContext {
+                protection: &protection,
+                observations: &observed,
+            },
+        })
+        .expect_err("a manual rule shadow must still be refused");
+        assert!(
+            format!("{error}").contains("shadowed by an earlier manual rule"),
+            "{error}"
+        );
     }
 }

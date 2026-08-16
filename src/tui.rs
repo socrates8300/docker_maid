@@ -10,7 +10,7 @@ use crossterm::terminal::{
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
 use docker_maid::config::{Config, ConfigError, LoadedConfig};
 use docker_maid::configurator::{
-    add_name_prefix_candidate, candidate_display_indices, configuration_target_path,
+    add_name_prefix_candidate, candidate_display_indices, configuration_target_path, family_label,
     propose_configuration, refresh_candidate_warnings, survey_inventory, write_proposal,
     CandidateSelector, ConfigProposal, ConfiguratorError, ConfiguratorSurvey, PolicyProfile,
     PolicySettings, ProposalRequest, MANAGED_ID_PREFIX,
@@ -22,7 +22,7 @@ use docker_maid::plan::{
     build_plan_with_context, Action, Decision, Disposition, InventoryItem, Plan, PlanContext,
     ResourceKind,
 };
-use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
+use docker_maid::state::{ProtectionKind, ProtectionState, ProtectionStore, StatePaths};
 use futures_util::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -155,6 +155,7 @@ struct App {
     activity_scroll: u16,
     rules_scroll: u16,
     survey: ConfiguratorSurvey,
+    protection: ProtectionState,
     observations: ObservationState,
     configure_selected: BTreeSet<String>,
     configure_row: usize,
@@ -171,7 +172,7 @@ struct App {
 async fn startup_snapshot(
     loaded: &LoadedConfig,
     state_paths: &StatePaths,
-    protection: &docker_maid::state::ProtectionState,
+    protection: &ProtectionState,
     plan_created_at: i64,
 ) -> Result<(Plan, ConfiguratorSurvey, ObservationState, Option<String>), RunError> {
     let inventory = match collect_inventory_for_configuration().await {
@@ -230,7 +231,10 @@ impl App {
             &configure_policy,
             &startup_inventory,
             plan_created_at,
-            &observations,
+            &PlanContext {
+                protection: &protection,
+                observations: &observations,
+            },
         );
         let configure_row = first_configure_row(&survey);
         let status = docker_error.map_or_else(
@@ -244,6 +248,7 @@ impl App {
             built_in_config,
             state_paths,
             protection_store,
+            protection,
             plan,
             plan_id,
             plan_created_at,
@@ -318,6 +323,7 @@ impl App {
         self.config_hash = config_hash;
         self.plan_validity = PlanValidity::Valid;
         self.history = history;
+        self.protection = protection;
         self.observations = observations;
         self.survey = survey_inventory(&inventory);
         refresh_candidate_warnings(
@@ -325,7 +331,10 @@ impl App {
             &self.configure_policy,
             &inventory,
             plan_created_at,
-            &self.observations,
+            &PlanContext {
+                protection: &self.protection,
+                observations: &self.observations,
+            },
         );
         self.configure_selected.retain(|id| {
             self.survey
@@ -481,8 +490,20 @@ impl App {
             &self.configure_policy,
             &inventory,
             self.plan_created_at,
-            &self.observations,
+            &PlanContext {
+                protection: &self.protection,
+                observations: &self.observations,
+            },
         );
+    }
+
+    /// The durable state every policy and preview surface in this session
+    /// shares, so a preview never contradicts the plan beside it.
+    fn plan_context(&self) -> PlanContext<'_> {
+        PlanContext {
+            protection: &self.protection,
+            observations: &self.observations,
+        }
     }
 
     fn inventory_snapshot(&self) -> Vec<InventoryItem> {
@@ -556,7 +577,7 @@ impl App {
             policy: Some(&self.configure_policy),
             candidate_ids: &ids,
             now_epoch_seconds: self.plan_created_at,
-            observations: &self.observations,
+            context: self.plan_context(),
         })?;
         self.status = format!(
             "Proposal {}: {} pending removals; press s to review save",
@@ -674,6 +695,42 @@ impl App {
             self.protection_store
                 .add(kind, std::slice::from_ref(&value))?;
             self.status = format!("Protected: {kind} {}", decision.resource.name);
+        }
+        self.refresh().await
+    }
+
+    /// Protect or release every resource sharing the selected object's
+    /// ownership family through one typed runtime entry.
+    async fn toggle_family_protection(&mut self) -> Result<(), RunError> {
+        let Some(decision) = self.selected_inventory().cloned() else {
+            replace_status(&mut self.status, "No inventory object selected");
+            return Ok(());
+        };
+        let Some((key, value)) = family_label(&decision.resource) else {
+            replace_status(
+                &mut self.status,
+                &format!(
+                    "{} carries no Compose or agent family label; press p to protect it by ID",
+                    decision.resource.name
+                ),
+            );
+            return Ok(());
+        };
+        let (pair, members) = family_protection_target(&self.plan, key, value);
+        let held = self
+            .protection_store
+            .snapshot()?
+            .entries
+            .iter()
+            .any(|entry| entry.kind == ProtectionKind::Label && entry.value == pair);
+        if held {
+            self.protection_store
+                .remove(ProtectionKind::Label, std::slice::from_ref(&pair))?;
+            self.status = format!("Removed runtime protection: label {pair} ({members} objects)");
+        } else {
+            self.protection_store
+                .add(ProtectionKind::Label, std::slice::from_ref(&pair))?;
+            self.status = format!("Protected family: label {pair} ({members} objects)");
         }
         self.refresh().await
     }
@@ -944,6 +1001,9 @@ async fn handle_main_key(app: &mut App, key: KeyEvent) -> Result<bool, RunError>
         }
         KeyCode::Enter if app.view == View::Inventory => {
             app.detail_focused = !app.detail_focused;
+        }
+        KeyCode::Char('P') if app.view == View::Inventory => {
+            app.toggle_family_protection().await?;
         }
         KeyCode::Char('p') if app.view == View::Inventory => {
             app.toggle_protection().await?;
@@ -1854,7 +1914,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let line = if app.editor == Editor::None {
         Line::from(vec![
             Span::styled(
-                " ↑↓/jk move · 1–5 views · c prefix · p protect · h/l profile · [/] field · e edit · v preview · s save · a apply · q quit ",
+                " ↑↓/jk move · 1–5 views · c prefix · p protect · P family · h/l profile · [/] field · e edit · v preview · s save · a apply · q quit ",
                 Style::default().fg(Color::Black).bg(Color::Cyan),
             ),
             Span::raw(format!("  {status}")),
@@ -1947,7 +2007,8 @@ fn render_help(frame: &mut Frame<'_>) {
         Line::from("←/→ or h/l  Change inventory resource type"),
         Line::from("/           Filter inventory; Enter accepts; Esc clears"),
         Line::from("Enter       Focus inventory detail"),
-        Line::from("p           Toggle typed runtime protection"),
+        Line::from("p           Toggle typed runtime protection for this object"),
+        Line::from("P           Toggle one label protection for this whole family"),
         Line::from("c           Create an explicit name-prefix candidate from Inventory"),
         Line::from("Space/Enter Select a Configure ownership candidate"),
         Line::from("h/l         Change the Configure policy profile"),
@@ -2307,6 +2368,17 @@ fn execution_status(report: &ExecutionReport) -> String {
     format!("Apply complete: removed {removed}, skipped {skipped}, failed {failed}")
 }
 
+/// Build the exact protection value for one family and count its members in
+/// the current plan, so the action writes typed state and reports a true count.
+fn family_protection_target(plan: &Plan, key: &str, value: &str) -> (String, usize) {
+    let members = plan
+        .decisions
+        .iter()
+        .filter(|decision| family_label(&decision.resource) == Some((key, value)))
+        .count();
+    (format!("{key}={value}"), members)
+}
+
 fn protection_kind(kind: ResourceKind) -> Option<ProtectionKind> {
     match kind {
         ResourceKind::Container => Some(ProtectionKind::Container),
@@ -2528,6 +2600,132 @@ mod tests {
         assert!(!fuzzy_match("volume", "network"));
     }
 
+    #[tokio::test]
+    async fn the_family_action_writes_one_typed_label_entry_and_toggles_it() {
+        let root = std::env::temp_dir().join(format!(
+            "docker-maid-tui-family-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let paths = StatePaths::new(root.join("state"));
+        let survey = survey_inventory(&[]);
+        let mut app = App {
+            explicit_config: None,
+            loaded: LoadedConfig {
+                path: PathBuf::from("docker_maid.toml"),
+                config: Config::default(),
+                source: "# test config".to_owned(),
+            },
+            built_in_config: true,
+            state_paths: paths.clone(),
+            protection_store: ProtectionStore::new(paths.clone()),
+            protection: ProtectionState::default(),
+            plan: fixture_plan(),
+            plan_id: "test-plan".to_owned(),
+            plan_created_at: 1,
+            observations: ObservationState::default(),
+            config_hash: "test-config".to_owned(),
+            plan_validity: PlanValidity::Valid,
+            history: Vec::new(),
+            view: View::Inventory,
+            inventory_kind: ResourceKind::Container,
+            selected: 0,
+            filter: String::new(),
+            editor: Editor::None,
+            detail_focused: false,
+            overlay: Overlay::None,
+            confirm_scroll: 0,
+            activity_scroll: 0,
+            rules_scroll: 0,
+            survey,
+            configure_selected: BTreeSet::new(),
+            configure_row: 0,
+            configure_profile: PolicyProfile::Workstation,
+            configure_policy: PolicyProfile::Workstation.settings(),
+            policy_field: 0,
+            config_proposal: None,
+            prefix_input: String::new(),
+            status: String::new(),
+        };
+
+        // The action writes typed state and then refreshes. The refresh needs
+        // Docker, whose availability this unit test must not depend on, so the
+        // durable write is what is asserted.
+        let _ = app.toggle_family_protection().await;
+        let entries = ProtectionStore::new(paths.clone())
+            .snapshot()
+            .expect("read protection")
+            .entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, ProtectionKind::Label);
+        assert_eq!(entries[0].value, "ai-agent.owner=test");
+
+        // Pressing it again releases the same family. A successful refresh
+        // replaces the synthetic plan with the live daemon's, so restore the
+        // fixture the action reads from.
+        app.protection = ProtectionState::default();
+        app.plan = fixture_plan();
+        app.inventory_kind = ResourceKind::Container;
+        app.selected = 0;
+        let _ = app.toggle_family_protection().await;
+        assert!(ProtectionStore::new(paths)
+            .snapshot()
+            .expect("read protection")
+            .entries
+            .is_empty());
+
+        // A resource with no family label is refused with a pointer to `p`.
+        app.plan.decisions[0].resource.labels.clear();
+        app.toggle_family_protection()
+            .await
+            .expect("an unlabelled object is a status message, not an error");
+        assert!(app
+            .status
+            .contains("carries no Compose or agent family label"));
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    /// One container and one volume in the same `ai-agent.owner=test` family.
+    fn fixture_plan() -> Plan {
+        let mut volume = sample_decision();
+        volume.resource.kind = ResourceKind::Volume;
+        volume.resource.id = "vol".to_owned();
+        Plan {
+            decisions: vec![sample_decision(), volume],
+        }
+    }
+
+    #[test]
+    fn family_protection_targets_the_whole_family_and_never_build_cache() {
+        let mut volume = sample_decision();
+        volume.resource.kind = ResourceKind::Volume;
+        volume.resource.id = "vol".to_owned();
+        let mut other = sample_decision();
+        other.resource.kind = ResourceKind::Network;
+        other.resource.id = "net".to_owned();
+        other
+            .resource
+            .labels
+            .insert("ai-agent.owner".to_owned(), "different".to_owned());
+        let mut cache = sample_decision();
+        cache.resource.kind = ResourceKind::BuildCache;
+        cache.resource.id = "cache".to_owned();
+        cache.resource.labels.clear();
+
+        let plan = Plan {
+            decisions: vec![sample_decision(), volume, other, cache],
+        };
+        let (key, value) = family_label(&plan.decisions[0].resource).expect("family label");
+        let (pair, members) = family_protection_target(&plan, key, value);
+        assert_eq!(pair, "ai-agent.owner=test");
+        // The container and the volume, not the other owner and not the cache.
+        assert_eq!(members, 2);
+    }
+
     #[test]
     fn build_cache_has_no_typed_protection_kind() {
         assert_eq!(protection_kind(ResourceKind::BuildCache), None);
@@ -2632,6 +2830,7 @@ mod tests {
             built_in_config: false,
             state_paths: paths.clone(),
             protection_store: ProtectionStore::new(paths.clone()),
+            protection: ProtectionState::default(),
             plan_id: tui_plan_id("config", 1, &plan),
             plan,
             plan_created_at: 1,
@@ -2697,6 +2896,7 @@ mod tests {
             built_in_config: false,
             state_paths: paths.clone(),
             protection_store: ProtectionStore::new(paths),
+            protection: ProtectionState::default(),
             plan,
             plan_id: "test-plan".to_owned(),
             plan_created_at: 1,
@@ -2776,6 +2976,7 @@ mod tests {
             built_in_config: true,
             state_paths: paths.clone(),
             protection_store: ProtectionStore::new(paths),
+            protection: ProtectionState::default(),
             plan,
             plan_id: "test-plan".to_owned(),
             plan_created_at: 1,

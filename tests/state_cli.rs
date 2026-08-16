@@ -58,7 +58,7 @@ fn protect_and_unprotect_persist_typed_entries_across_processes() {
         String::from_utf8_lossy(&removed.stderr)
     );
     let state = read_state(&root);
-    assert_eq!(state.schema_version, 1);
+    assert_eq!(state.schema_version, 2);
     assert_eq!(state.entries.len(), 1);
     assert_eq!(state.entries[0].kind, ProtectionKind::Network);
     assert_eq!(state.entries[0].value, "second-network");
@@ -171,5 +171,100 @@ fn state_falls_back_to_home_when_xdg_is_unset() {
     assert!(root
         .join("home/.local/state/docker_maid/protection.toml")
         .is_file());
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn label_protection_round_trips_as_one_exact_pair() {
+    let root = temp_dir("label-pair");
+    let added = run(
+        &root,
+        &["protect", "label", "com.docker.compose.project=immich"],
+    );
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    assert!(String::from_utf8_lossy(&added.stdout).contains("added 1, total 1"));
+
+    let state = read_state(&root);
+    assert_eq!(state.schema_version, 2);
+    assert_eq!(state.entries[0].kind, ProtectionKind::Label);
+    assert_eq!(state.entries[0].value, "com.docker.compose.project=immich");
+
+    // A value that is not one exact key=value pair is refused, not stored.
+    let rejected = run(&root, &["protect", "label", "com.docker.compose.project"]);
+    assert_eq!(rejected.status.code(), Some(6));
+    assert!(rejected.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("key=value"));
+    assert_eq!(read_state(&root).entries.len(), 1);
+
+    let removed = run(
+        &root,
+        &["unprotect", "label", "com.docker.compose.project=immich"],
+    );
+    assert!(removed.status.success());
+    assert!(read_state(&root).entries.is_empty());
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn a_version_one_state_file_is_read_by_this_build() {
+    let root = temp_dir("v1-read");
+    let directory = root.join("state/docker_maid");
+    fs::create_dir_all(&directory).expect("create state directory");
+    fs::write(
+        directory.join("protection.toml"),
+        "schema_version = 1\n\n[[entries]]\nkind = \"volume\"\nvalue = \"legacy\"\n",
+    )
+    .expect("write version 1 state");
+
+    let added = run(&root, &["protect", "label", "ai-agent.owner=example"]);
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    // The version 1 entry survives the upgrade rather than being discarded.
+    assert!(String::from_utf8_lossy(&added.stdout).contains("added 1, total 2"));
+    let state = read_state(&root);
+    assert_eq!(state.schema_version, 2);
+    assert!(state
+        .entries
+        .iter()
+        .any(|entry| entry.kind == ProtectionKind::Volume && entry.value == "legacy"));
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn unprotect_label_cites_the_configured_label_glob_not_a_name_regex() {
+    let root = temp_dir("config-label");
+    let config = root.join("config.toml");
+    fs::write(
+        &config,
+        "[protect]\nnames = ['.*']\nlabels = ['com.docker.compose.project=immich']\n",
+    )
+    .expect("write configuration");
+    let output = run(
+        &root,
+        &[
+            "--config",
+            config.to_str().expect("UTF-8 config path"),
+            "unprotect",
+            "label",
+            "com.docker.compose.project=immich",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(6));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The catch-all name regex must not be blamed for a label pair.
+    assert!(stderr.contains("protect.labels[0]"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{}:3", config.display())),
+        "{stderr}"
+    );
     fs::remove_dir_all(root).expect("remove test directory");
 }

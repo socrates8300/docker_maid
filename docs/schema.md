@@ -139,7 +139,15 @@ A rule is `regressed` only when its previous completed pass match count was non-
 
 ## Protection and configuration documents
 
-`protect` and `unprotect` return `command`, `resource_kind`, `changed`, and `total_runtime_protection_entries`.
+`protect` and `unprotect` return `command`, `resource_kind`, `changed`, and
+`total_runtime_protection_entries`. `resource_kind` is `container`, `image`,
+`volume`, `network`, or `label`. A `label` entry is one exact `key=value` pair
+and protects every resource kind carrying it; build cache exposes no Docker
+labels and never matches. Runtime protection lives in
+`$XDG_STATE_HOME/docker_maid/protection.toml` at `schema_version = 2`. Version 1
+files are read unchanged and rewritten at version 2 by the next protection
+change. An unreadable `schema_version` is a `state_io` failure with exit `6`,
+never an empty protected set.
 
 `config default`, `config check`, and `config print` return `command`, `path`, and the parsed `configuration` object. `path` is `null` for the built-in default.
 

@@ -11,7 +11,7 @@ use docker_maid::inventory::{collect_inventory, collect_inventory_for_configurat
 use docker_maid::machine;
 use docker_maid::observation::{ObservationState, ObservationStore};
 use docker_maid::plan::{build_plan_with_context, Action, Disposition, Plan, PlanContext};
-use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
+use docker_maid::state::{ProtectionKind, ProtectionState, ProtectionStore, StatePaths};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
@@ -95,6 +95,9 @@ enum Command {
     /// Show current inventory disposition and the last completed cleanup pass.
     Status,
     /// Add one or more typed runtime protection entries.
+    ///
+    /// A `label` value is one exact `key=value` pair and protects every
+    /// container, image, volume, and network carrying it.
     Protect {
         #[arg(value_enum)]
         kind: CliProtectionKind,
@@ -201,6 +204,8 @@ enum CliProtectionKind {
     Volume,
     Image,
     Network,
+    /// One exact `key=value` label covering a whole ownership family.
+    Label,
 }
 
 impl From<CliProtectionKind> for ProtectionKind {
@@ -210,6 +215,7 @@ impl From<CliProtectionKind> for ProtectionKind {
             CliProtectionKind::Volume => Self::Volume,
             CliProtectionKind::Image => Self::Image,
             CliProtectionKind::Network => Self::Network,
+            CliProtectionKind::Label => Self::Label,
         }
     }
 }
@@ -476,14 +482,21 @@ fn render_config_validation(
 
 /// Read the observed-unreferenced record for a configuration-time preview.
 ///
-/// Configuration surfaces read this clock but never advance it: only a policy
-/// pass observes. A host without durable state simply previews nothing as
-/// eligible, which is the same conservative answer the policy engine gives.
-fn configuration_observations() -> Result<ObservationState, RunError> {
-    match StatePaths::from_env() {
-        Ok(paths) => Ok(ObservationStore::new(paths).snapshot()?),
-        Err(_) => Ok(ObservationState::default()),
-    }
+/// Read the durable state a configuration preview must respect.
+///
+/// Configuration surfaces read the observed-unreferenced clock but never
+/// advance it: only a policy pass observes. Runtime protection is read for the
+/// same reason a policy pass reads it, so a protected family is never counted
+/// as pending. A host without durable state previews nothing as eligible and
+/// nothing as protected, which is the same answer the policy engine gives.
+fn configuration_state() -> Result<(ProtectionState, ObservationState), RunError> {
+    let Ok(paths) = StatePaths::from_env() else {
+        return Ok((ProtectionState::default(), ObservationState::default()));
+    };
+    Ok((
+        ProtectionStore::new(paths.clone()).snapshot()?,
+        ObservationStore::new(paths).snapshot()?,
+    ))
 }
 
 async fn run_config_survey(
@@ -492,13 +505,16 @@ async fn run_config_survey(
 ) -> Result<RunOutcome, RunError> {
     let inventory = collect_inventory_for_configuration().await?;
     let mut survey = survey_inventory(&inventory);
-    let observations = configuration_observations()?;
+    let (protection, observations) = configuration_state()?;
     refresh_candidate_warnings(
         &mut survey,
         policy,
         &inventory,
         epoch_seconds()?,
-        &observations,
+        &PlanContext {
+            protection: &protection,
+            observations: &observations,
+        },
     );
     if format == OutputFormat::Json {
         write_serializable_payload(&survey)?;
@@ -534,6 +550,7 @@ async fn run_config_propose(
         )?);
     }
     let (source, source_existed, target_path) = configurator_base(explicit_config)?;
+    let (protection, observations) = configuration_state()?;
     let proposal = propose_configuration(&ProposalRequest {
         base_source: &source,
         source_existed,
@@ -544,7 +561,10 @@ async fn run_config_propose(
         policy: Some(policy),
         candidate_ids: &selected,
         now_epoch_seconds: epoch_seconds()?,
-        observations: &configuration_observations()?,
+        context: PlanContext {
+            protection: &protection,
+            observations: &observations,
+        },
     })?;
     if format == OutputFormat::Json {
         write_serializable_payload(&proposal)?;
@@ -1294,22 +1314,47 @@ fn refuse_config_sourced_unprotect(
         return Ok(());
     };
     for value in values {
-        for (index, pattern) in loaded.config.protect.names.iter().enumerate() {
-            let matches = regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(value));
-            if matches {
-                let line = protect_names_line(&loaded.source)
-                    .map_or_else(String::new, |line| format!(":{line}"));
-                return Err(RunError::State(format!(
-                    "cannot unprotect {kind} {value:?}: it is protected by {}{line} (protect.names[{index}]); edit that configuration entry",
-                    loaded.path.display(),
-                )));
-            }
+        // A label value is a key=value pair, not a resource name, so the name
+        // regexes cannot speak about it. Its configuration twin is
+        // protect.labels, which uses globs over the key or the whole pair.
+        let conflict = if kind == ProtectionKind::Label {
+            config_label_conflict(&loaded.config.protect.labels, value)
+        } else {
+            config_name_conflict(&loaded.config.protect.names, value)
+        };
+        if let Some((field, index)) = conflict {
+            let line = protect_field_line(&loaded.source, field)
+                .map_or_else(String::new, |line| format!(":{line}"));
+            return Err(RunError::State(format!(
+                "cannot unprotect {kind} {value:?}: it is protected by {}{line} (protect.{field}[{index}]); edit that configuration entry",
+                loaded.path.display(),
+            )));
         }
     }
     Ok(())
 }
 
-fn protect_names_line(source: &str) -> Option<usize> {
+fn config_name_conflict(patterns: &[String], value: &str) -> Option<(&'static str, usize)> {
+    patterns
+        .iter()
+        .position(|pattern| regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(value)))
+        .map(|index| ("names", index))
+}
+
+fn config_label_conflict(patterns: &[String], pair: &str) -> Option<(&'static str, usize)> {
+    let key = pair.split_once('=').map_or(pair, |(key, _)| key);
+    patterns
+        .iter()
+        .position(|pattern| {
+            globset::Glob::new(pattern).is_ok_and(|glob| {
+                let matcher = glob.compile_matcher();
+                matcher.is_match(key) || matcher.is_match(pair)
+            })
+        })
+        .map(|index| ("labels", index))
+}
+
+fn protect_field_line(source: &str, field: &str) -> Option<usize> {
     let mut in_protect = false;
     for (index, line) in source.lines().enumerate() {
         let line = line.trim();
@@ -1323,7 +1368,7 @@ fn protect_names_line(source: &str) -> Option<usize> {
         if in_protect
             && line
                 .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "names")
+                .is_some_and(|(key, _)| key.trim() == field)
         {
             return Some(index + 1);
         }

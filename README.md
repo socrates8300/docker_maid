@@ -167,7 +167,9 @@ unused policies. Docker exposes no last-used or detach timestamp, so image
 `unused_for`, volume `orphan_for`, and network `orphan_for` measure how long
 docker_maid has continuously *observed* the resource unreferenced, recorded in
 `$XDG_STATE_HOME/docker_maid/observation.toml`. The first pass that sees a
-resource unreferenced starts its clock at zero and can never remove it.
+resource unreferenced starts its clock at zero and can never remove it. An
+image, volume, or network rule with no age floor removes nothing and says so:
+without a floor there is no measurement to trust.
 Container floors still use Docker's own state timestamps. Built-in Docker
 networks are implicitly protected.
 
@@ -227,19 +229,34 @@ docker_maid protect container '^agent-session-important$'
 docker_maid protect image agent-base:latest
 docker_maid protect volume workspace-data
 docker_maid protect network shared-services
+docker_maid protect label com.docker.compose.project=immich
 
 docker_maid unprotect network shared-services
 ```
 
+A `label` entry is one exact `key=value` pair. It protects every container,
+image, volume, and network carrying that pair, so one entry covers a whole
+Compose project or agent family at once. Matching is byte-for-byte on both the
+key and the value: `project=immich` never protects `project=immich-staging`.
+Build cache records expose no Docker labels, so a label entry never matches
+them. This is deliberately narrower than configuration `protect.labels`, which
+are globs matched against the key or the whole pair.
+
 Entries persist in `$XDG_STATE_HOME/docker_maid/protection.toml`, or
 `~/.local/state/docker_maid/protection.toml` when `XDG_STATE_HOME` is unset.
+That file is `schema_version = 2`. Version 1 files are read unchanged and are
+rewritten at version 2 by the next protection change, so an upgrade needs no
+migration step. An older build reading a version 2 file stops with exit `6`
+rather than silently ignoring the label entries it cannot represent.
 Concurrent writers use one exclusive lock and an atomic, durable file
 replacement. The state directory is mode `0700` and its files are mode `0600`
 on Unix. Repeated `protect` and `unprotect` operations are idempotent.
 
 Configuration `[protect]` entries and runtime entries form one protected set.
-`unprotect` cannot remove a matching configuration-sourced name; its diagnostic
-points to the configuration field that must be edited. Before each delete, the
+`unprotect` cannot remove a matching configuration-sourced entry; its diagnostic
+points to the configuration field that must be edited. A name is checked against
+`protect.names`, and a label pair against `protect.labels`, so a catch-all name
+regex is never blamed for a label. Before each delete, the
 executor reloads runtime state under a shared inter-process lock and holds that
 lock through the Docker request.
 
@@ -303,7 +320,9 @@ and activity journal as the non-interactive commands:
 
 Use `1`–`5` to switch views, `j`/`k` to move, `/` to filter, `c` to approve a
 name prefix from the selected inventory object, `p` to toggle runtime
-protection, `r` to refresh, `?` for help, and `q` to quit. Build cache always
+protection for that one object, `P` to toggle one label protection for its whole
+ownership family, `r` to refresh, `?` for help, and `q` to quit. Both keys write
+typed runtime state; neither edits your configuration file. Build cache always
 opens a dedicated unscoped-warning modal. There is no per-object delete key.
 
 The TUI refuses to start unless both stdin and stdout are terminals. It exits

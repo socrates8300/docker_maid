@@ -449,7 +449,7 @@ impl CompiledPolicy {
         let unreferenced_age = context.observations.unreferenced_age(&item, now);
         match item.kind {
             ResourceKind::Container => self.decide_container(item, now),
-            ResourceKind::Image => self.decide_image(item, now, unreferenced_age),
+            ResourceKind::Image => self.decide_image(item, unreferenced_age),
             ResourceKind::Volume => self.decide_volume(item, unreferenced_age),
             ResourceKind::Network => self.decide_network(item, unreferenced_age),
             ResourceKind::BuildCache => self.decide_build_cache(item, now, build_cache_removals),
@@ -497,12 +497,7 @@ impl CompiledPolicy {
         unowned(item)
     }
 
-    fn decide_image(
-        &self,
-        item: InventoryItem,
-        now: i64,
-        unreferenced_age: Option<u64>,
-    ) -> Decision {
+    fn decide_image(&self, item: InventoryItem, unreferenced_age: Option<u64>) -> Decision {
         for rule in &self.images {
             let Some(selector) = rule.common.selector.match_reason(&item) else {
                 continue;
@@ -529,40 +524,39 @@ impl CompiledPolicy {
                     format!("matched {selector}; no image removal predicate matched"),
                 );
             }
-            if let Some(threshold) = rule.unused_for {
-                if unreferenced_age.is_none_or(|value| value < threshold.as_secs()) {
-                    return keep(
-                        item,
-                        disposition,
-                        Some(rule.common.name.clone()),
-                        observed_wait_reason(
-                            &selector,
-                            "unreferenced",
-                            unreferenced_age,
-                            threshold,
-                        ),
-                    );
-                }
+            let Some(threshold) = rule.unused_for else {
+                return keep(
+                    item,
+                    disposition,
+                    Some(rule.common.name.clone()),
+                    format!("matched {selector}; no unused age policy is set"),
+                );
+            };
+            if unreferenced_age.is_none_or(|value| value < threshold.as_secs()) {
+                return keep(
+                    item,
+                    disposition,
+                    Some(rule.common.name.clone()),
+                    observed_wait_reason(&selector, "unreferenced", unreferenced_age, threshold),
+                );
             }
             let predicate = if rule.dangling && item.dangling {
                 "dangling image"
             } else {
                 "image tag pattern"
             };
-            let age = rule
-                .unused_for
-                .map_or_else(|| age_seconds(now, item.created_at), |_| unreferenced_age);
-            let reason = rule.unused_for.map_or_else(
-                || format!("matched {selector}; unreferenced {predicate}"),
-                |threshold| {
-                    format!(
-                        "matched {selector}; unreferenced {predicate}; observed unreferenced for {} which meets {}",
-                        unreferenced_age.map_or_else(|| "unknown".to_owned(), format_duration),
-                        format_duration(threshold.as_secs())
-                    )
-                },
+            let reason = format!(
+                "matched {selector}; unreferenced {predicate}; observed unreferenced for {} which meets {}",
+                unreferenced_age.map_or_else(|| "unknown".to_owned(), format_duration),
+                format_duration(threshold.as_secs())
             );
-            return remove(item, disposition, &rule.common.name, age, reason);
+            return remove(
+                item,
+                disposition,
+                &rule.common.name,
+                unreferenced_age,
+                reason,
+            );
         }
         unowned(item)
     }
@@ -635,12 +629,11 @@ impl CompiledPolicy {
                 );
             }
             let Some(threshold) = rule.orphan_for else {
-                return remove(
+                return keep(
                     item,
                     disposition,
-                    &rule.common.name,
-                    unreferenced_age,
-                    format!("matched {selector}; user-defined network has no containers"),
+                    Some(rule.common.name.clone()),
+                    format!("matched {selector}; no orphan age policy is set"),
                 );
             };
             if unreferenced_age.is_some_and(|seconds| seconds >= threshold.as_secs()) {
@@ -1123,6 +1116,7 @@ orphan_for = "1h"
 name = "networks"
 select.names = ["^agent-n"]
 orphan = true
+orphan_for = "1h"
 "#,
         );
         let mut container = item(ResourceKind::Container, "agent-c");
@@ -1161,7 +1155,7 @@ orphan = true
                 "container  agent-c         stopped    2h   owned        containers  remove  matched name regex ^agent-c; state age 2h meets 1h\n",
                 "image      agent-i:latest  available  1d   owned        images      remove  matched name part agent-i; unreferenced dangling image; observed unreferenced for 1d which meets 1h\n",
                 "volume     agent-v         available  1d   owned        volumes     remove  matched label agent.volume=true (agent.volume=true); observed unattached for 1d which meets 1h\n",
-                "network    agent-n         available  1d   owned        networks    remove  matched name regex ^agent-n; user-defined network has no containers\n",
+                "network    agent-n         available  1d   owned        networks    remove  matched name regex ^agent-n; observed empty for 1d which meets 1h\n",
                 "\nPending removals: 4\n",
                 "Scanned: containers=1 images=1 volumes=1 networks=1 build_cache=0\n",
             )
@@ -1318,6 +1312,138 @@ orphan_for = "1s"
     }
 
     #[test]
+    fn one_label_entry_protects_a_whole_family_from_every_matching_rule() {
+        let config = config(
+            r#"
+[[rules.images]]
+name = "images"
+select.labels = ["com.docker.compose.project=*"]
+dangling = true
+unused_for = "1h"
+
+[[rules.volumes]]
+name = "volumes"
+select.labels = ["com.docker.compose.project=*"]
+orphan_for = "1h"
+
+[[rules.networks]]
+name = "networks"
+select.labels = ["com.docker.compose.project=*"]
+orphan = true
+orphan_for = "1h"
+"#,
+        );
+        let stack = |kind, name, project: &str| {
+            let mut resource = item(kind, name);
+            resource
+                .labels
+                .insert("com.docker.compose.project".to_owned(), project.to_owned());
+            resource.dangling = kind == ResourceKind::Image;
+            resource
+        };
+        let inventory = vec![
+            stack(ResourceKind::Image, "immich/server:latest", "immich"),
+            stack(ResourceKind::Volume, "immich_pgdata", "immich"),
+            stack(ResourceKind::Network, "immich_default", "immich"),
+            stack(ResourceKind::Volume, "scratch_data", "scratch"),
+        ];
+        let observations = ObservationState::default().folded(&inventory, NOW - 86_400);
+        let protection = ProtectionState {
+            schema_version: 2,
+            entries: vec![crate::state::ProtectionEntry {
+                kind: crate::state::ProtectionKind::Label,
+                value: "com.docker.compose.project=immich".to_owned(),
+            }],
+        };
+        let plan = build_plan_with_context(
+            &config,
+            inventory,
+            NOW,
+            &PlanContext {
+                protection: &protection,
+                observations: &observations,
+            },
+        )
+        .expect("plan");
+
+        for decision in &plan.decisions {
+            let project = decision
+                .resource
+                .labels
+                .get("com.docker.compose.project")
+                .map(String::as_str);
+            if project == Some("immich") {
+                assert_eq!(
+                    decision.disposition,
+                    Disposition::Protected,
+                    "{} must be protected",
+                    decision.resource.name
+                );
+                assert_eq!(decision.action, Action::Keep);
+                assert_eq!(
+                    decision.reason,
+                    "matched runtime protection label com.docker.compose.project=immich"
+                );
+            } else {
+                // The unrelated family stays fully eligible.
+                assert_eq!(decision.action, Action::Remove, "{decision:?}");
+            }
+        }
+        assert_eq!(plan.pending_count(), 1);
+    }
+
+    #[test]
+    fn a_rule_without_an_age_floor_never_removes_on_first_observation() {
+        // Volumes already failed safe; networks and images now match them, so
+        // no rule can delete a resource the observed clock has not measured.
+        let config = config(
+            r#"
+[[rules.images]]
+name = "images"
+select.name_parts = ["agent-i"]
+dangling = true
+
+[[rules.volumes]]
+name = "volumes"
+select.name_parts = ["agent-v"]
+
+[[rules.networks]]
+name = "networks"
+select.names = ["^agent-n"]
+orphan = true
+"#,
+        );
+        let mut image = item(ResourceKind::Image, "agent-i:latest");
+        image.dangling = true;
+        let inventory = vec![
+            image,
+            item(ResourceKind::Volume, "agent-v"),
+            item(ResourceKind::Network, "agent-n"),
+        ];
+        // A record a day old: age is not the reason these survive.
+        let observations = ObservationState::default().folded(&inventory, NOW - 86_400);
+        let plan = build_plan_with_context(
+            &config,
+            inventory,
+            NOW,
+            &PlanContext {
+                observations: &observations,
+                ..PlanContext::default()
+            },
+        )
+        .expect("plan");
+
+        assert_eq!(plan.pending_count(), 0);
+        for decision in &plan.decisions {
+            assert!(
+                decision.reason.contains("no orphan age policy is set")
+                    || decision.reason.contains("no unused age policy is set"),
+                "{decision:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unowned_resources_are_never_removals() {
         let config = config(
             r#"
@@ -1347,11 +1473,23 @@ scope = "all"
 allow_unscoped = true
 select.name_parts = ["sha256:"]
 dangling = true
+unused_for = "1h"
 "#,
         );
         let mut image = item(ResourceKind::Image, "sha256:abc");
         image.dangling = true;
-        let plan = build_plan(&config, vec![image], NOW).expect("build plan");
+        let inventory = vec![image];
+        let observations = ObservationState::default().folded(&inventory, NOW - 86_400);
+        let plan = build_plan_with_context(
+            &config,
+            inventory,
+            NOW,
+            &PlanContext {
+                observations: &observations,
+                ..PlanContext::default()
+            },
+        )
+        .expect("build plan");
         assert_eq!(
             plan.decisions[0].disposition,
             Disposition::AuthorizedUnscoped

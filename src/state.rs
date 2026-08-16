@@ -11,7 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
+/// The oldest protection layout this build still understands.
+///
+/// Version 1 predates [`ProtectionKind::Label`], so every version 1 file is a
+/// valid version 2 file. An older build reading a version 2 file still fails
+/// closed rather than dropping the label entries it cannot represent.
+const MIN_READABLE_SCHEMA_VERSION: u32 = 1;
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -75,6 +81,8 @@ pub enum ProtectionKind {
     Volume,
     Image,
     Network,
+    /// One exact Docker `key=value` label, matched across every resource kind.
+    Label,
 }
 
 impl fmt::Display for ProtectionKind {
@@ -84,8 +92,22 @@ impl fmt::Display for ProtectionKind {
             Self::Volume => "volume",
             Self::Image => "image",
             Self::Network => "network",
+            Self::Label => "label",
         })
     }
+}
+
+/// Split an exact `key=value` protection value at its first `=`.
+///
+/// Docker label values may themselves contain `=`, so only the first separator
+/// is structural. The key must be present and carry no surrounding whitespace;
+/// the value is taken verbatim so matching stays byte-for-byte exact.
+fn label_pair(value: &str) -> Option<(&str, &str)> {
+    let (key, label_value) = value.split_once('=')?;
+    if key.is_empty() || key != key.trim() {
+        return None;
+    }
+    Some((key, label_value))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -137,6 +159,13 @@ impl ProtectionState {
 }
 
 fn entry_matches(entry: &ProtectionEntry, item: &InventoryItem) -> bool {
+    if entry.kind == ProtectionKind::Label {
+        // One label entry protects every kind carrying that exact pair. Build
+        // cache records expose no Docker labels, so they never match here.
+        return label_pair(&entry.value)
+            .is_some_and(|(key, value)| item.labels.get(key).is_some_and(|found| found == value));
+    }
+
     let kind_matches = matches!(
         (entry.kind, item.kind),
         (ProtectionKind::Container, ResourceKind::Container)
@@ -394,6 +423,12 @@ fn validate_values(kind: ProtectionKind, values: &[String]) -> Result<(), StateE
                 ))
             })?;
         }
+        if kind == ProtectionKind::Label && label_pair(value).is_none() {
+            return Err(StateError::Invalid(format!(
+                "label protection value {value:?} must be one exact key=value pair \
+                 with a non-blank key"
+            )));
+        }
     }
     Ok(())
 }
@@ -411,12 +446,16 @@ fn read_state(path: &Path) -> Result<ProtectionState, StateError> {
             path: path.to_path_buf(),
             source,
         })?;
-    if state.schema_version != SCHEMA_VERSION {
+    if !(MIN_READABLE_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&state.schema_version) {
         return Err(StateError::Invalid(format!(
-            "unsupported protection state schema_version {}; expected {SCHEMA_VERSION}",
+            "unsupported protection state schema_version {}; expected \
+             {MIN_READABLE_SCHEMA_VERSION} through {SCHEMA_VERSION}",
             state.schema_version
         )));
     }
+    // An older file is read as-is and only rewritten at the current version by
+    // the next protection change, so reading alone never mutates state.
+    state.schema_version = SCHEMA_VERSION;
     for entry in &state.entries {
         validate_values(entry.kind, std::slice::from_ref(&entry.value))?;
     }
@@ -556,6 +595,141 @@ mod tests {
                 .unwrap(),
             1
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn labelled(kind: ResourceKind, id: &str, pairs: &[(&str, &str)]) -> InventoryItem {
+        let mut resource = item(kind, id, id);
+        resource.labels = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        resource
+    }
+
+    fn label_state(value: &str) -> ProtectionState {
+        ProtectionState {
+            schema_version: SCHEMA_VERSION,
+            entries: vec![ProtectionEntry {
+                kind: ProtectionKind::Label,
+                value: value.to_owned(),
+            }],
+        }
+    }
+
+    #[test]
+    fn one_label_entry_protects_every_kind_in_the_family() {
+        let state = label_state("com.docker.compose.project=immich");
+        let pair = [("com.docker.compose.project", "immich")];
+        for kind in [
+            ResourceKind::Container,
+            ResourceKind::Image,
+            ResourceKind::Volume,
+            ResourceKind::Network,
+        ] {
+            let reason = state
+                .match_reason(&labelled(kind, "x", &pair))
+                .unwrap_or_else(|| panic!("{kind} in the family must be protected"));
+            assert_eq!(
+                reason,
+                "matched runtime protection label com.docker.compose.project=immich"
+            );
+        }
+    }
+
+    #[test]
+    fn label_protection_is_exact_and_never_matches_build_cache() {
+        let state = label_state("com.docker.compose.project=immich");
+        // Build cache carries no Docker labels at all.
+        assert!(state
+            .match_reason(&item(ResourceKind::BuildCache, "sha256:abc", "cache"))
+            .is_none());
+        // A different value, a prefix, and a key-only match must all miss.
+        for pairs in [
+            vec![("com.docker.compose.project", "immich-staging")],
+            vec![("com.docker.compose.project", "immic")],
+            vec![("com.docker.compose.project", "")],
+            vec![("com.docker.compose.service", "immich")],
+        ] {
+            assert!(
+                state
+                    .match_reason(&labelled(ResourceKind::Volume, "v", &pairs))
+                    .is_none(),
+                "{pairs:?} must not match an exact key=value entry"
+            );
+        }
+    }
+
+    #[test]
+    fn a_label_value_may_contain_its_own_equals_sign() {
+        let state = label_state("ai-agent.command=run --flag=1");
+        assert!(state
+            .match_reason(&labelled(
+                ResourceKind::Container,
+                "c",
+                &[("ai-agent.command", "run --flag=1")]
+            ))
+            .is_some());
+    }
+
+    #[test]
+    fn label_values_without_an_exact_pair_are_refused() {
+        for value in ["com.docker.compose.project", "=immich", " key=value", ""] {
+            let error = validate_values(ProtectionKind::Label, &[value.to_owned()])
+                .expect_err("{value:?} is not one exact key=value pair");
+            assert!(matches!(error, StateError::Invalid(_)), "{value:?}");
+        }
+        // An empty label value is legal in Docker and stays legal here.
+        validate_values(ProtectionKind::Label, &["key=".to_owned()]).unwrap();
+    }
+
+    #[test]
+    fn a_version_one_file_is_read_and_upgraded_only_by_the_next_change() {
+        let root = std::env::temp_dir().join(format!("docker-maid-v1-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let paths = StatePaths::new(root.clone());
+        paths.prepare_root().unwrap();
+        fs::write(
+            paths.protection_file(),
+            "schema_version = 1\n\n[[entries]]\nkind = \"volume\"\nvalue = \"keepme\"\n",
+        )
+        .unwrap();
+
+        let store = ProtectionStore::new(paths.clone());
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot.entries.len(), 1);
+        assert!(snapshot
+            .match_reason(&item(ResourceKind::Volume, "v1", "keepme"))
+            .is_some());
+        // Reading alone must not rewrite the file.
+        let on_disk = fs::read_to_string(paths.protection_file()).unwrap();
+        assert!(on_disk.contains("schema_version = 1"), "{on_disk}");
+
+        store
+            .add(
+                ProtectionKind::Label,
+                &["com.docker.compose.project=immich".to_owned()],
+            )
+            .unwrap();
+        let upgraded = fs::read_to_string(paths.protection_file()).unwrap();
+        assert!(upgraded.contains("schema_version = 2"), "{upgraded}");
+        assert!(upgraded.contains("keepme"), "{upgraded}");
+        assert!(upgraded.contains("kind = \"label\""), "{upgraded}");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_schema_version_fails_closed() {
+        let root = std::env::temp_dir().join(format!("docker-maid-v9-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let paths = StatePaths::new(root.clone());
+        paths.prepare_root().unwrap();
+        fs::write(paths.protection_file(), "schema_version = 9\n").unwrap();
+        let error = ProtectionStore::new(paths)
+            .snapshot()
+            .expect_err("a future layout must not be read as empty protection");
+        assert!(matches!(error, StateError::Invalid(_)), "{error}");
         fs::remove_dir_all(root).unwrap();
     }
 }

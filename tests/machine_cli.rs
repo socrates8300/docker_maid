@@ -24,6 +24,26 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
+/// Start the observed-unreferenced clock for a fresh fixture and wait past the
+/// one-second floor, so the pass under test has a measurement to act on.
+async fn observe_past_floor(config: &Path, state_home: &Path) {
+    let output = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 config path"),
+            "plan",
+        ])
+        .env("XDG_STATE_HOME", state_home)
+        .output()
+        .expect("run warm-up plan");
+    assert!(
+        output.status.success() || output.status.code() == Some(1),
+        "warm-up plan failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+}
+
 fn run(root: &Path, args: &[&str]) -> Output {
     Command::new(binary())
         .args(args)
@@ -287,7 +307,7 @@ async fn live_plan_clean_apply_and_status_have_json_parity() {
     fs::write(
         &config,
         format!(
-            "[[rules.networks]]\nname='machine-json'\nselect.labels=['docker-maid.machine={label}']\norphan=true\n"
+            "[[rules.networks]]\nname='machine-json'\nselect.labels=['docker-maid.machine={label}']\norphan=true\norphan_for='1s'\n"
         ),
     )
     .expect("write live configuration");
@@ -316,6 +336,7 @@ async fn live_plan_clean_apply_and_status_have_json_parity() {
             .expect("run live machine command")
     };
 
+    observe_past_floor(&config, &root.join("state")).await;
     let plan = live_run(&["plan"]);
     assert_eq!(plan.status.code(), Some(1));
     assert!(plan.stderr.is_empty());
@@ -374,7 +395,7 @@ async fn live_daemon_json_emits_plan_action_summary_and_shutdown() {
     fs::write(
         &config,
         format!(
-            "[defaults]\ninterval='30s'\n[[rules.networks]]\nname='machine-daemon'\nselect.labels=['docker-maid.machine={label}']\norphan=true\n"
+            "[defaults]\ninterval='30s'\n[[rules.networks]]\nname='machine-daemon'\nselect.labels=['docker-maid.machine={label}']\norphan=true\norphan_for='1s'\n"
         ),
     )
     .expect("write live daemon configuration");
@@ -389,6 +410,7 @@ async fn live_daemon_json_emits_plan_action_summary_and_shutdown() {
         .await
         .expect("create live daemon network");
 
+    observe_past_floor(&config, &root.join("state")).await;
     let stdout = fs::File::create(&stdout_path).expect("create live NDJSON capture");
     let child = Command::new(binary())
         .args([
