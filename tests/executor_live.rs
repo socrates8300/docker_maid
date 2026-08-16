@@ -56,7 +56,7 @@ fn network_config(rule_label: &str, protected_name: Option<&str>) -> String {
 
 async fn capture_plan(config_path: &Path) -> (Config, String, Plan) {
     let loaded = load_config(Some(config_path), Path::new("."), None).expect("load live config");
-    let inventory = collect_inventory(false)
+    let inventory = collect_inventory(&loaded.config)
         .await
         .expect("collect live inventory");
     let plan = build_plan(&loaded.config, inventory, now_epoch_seconds()).expect("build live plan");

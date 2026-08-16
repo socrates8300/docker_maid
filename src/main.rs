@@ -1,7 +1,7 @@
 use clap::{error::ErrorKind, Parser, Subcommand};
 use docker_maid::config::{load_config, DEFAULT_CONFIG};
 use docker_maid::executor::execute_plan;
-use docker_maid::inventory::{collect_inventory, needs_container_state};
+use docker_maid::inventory::collect_inventory;
 use docker_maid::plan::{build_plan, Action, Disposition};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -174,10 +174,10 @@ async fn run_cleanup(
     let loaded = load_selected_config(explicit_config)?;
     if loaded.config.rules.build_cache.is_some() {
         write_diagnostic(
-            "warning: rules.build_cache was not evaluated because build-cache inventory is not implemented",
+            "warning: build-cache policy is authorized-unscoped because Docker cache records have no ownership metadata",
         );
     }
-    let inventory = collect_inventory(needs_container_state(&loaded.config)).await?;
+    let inventory = collect_inventory(&loaded.config).await?;
     let plan = build_plan(&loaded.config, inventory, epoch_seconds()?)
         .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
 

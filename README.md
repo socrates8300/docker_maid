@@ -4,10 +4,10 @@
 
 > [!IMPORTANT]
 > **Project status: early implementation.** Strict configuration, read-only
-> planning, and one-shot cleanup for containers, images, volumes, and networks
-> work from source. Build-cache inventory, durable protection state, activity
-> history, daemon mode, JSON mode, and the TUI are not implemented or released
-> yet. Commands in planned sections do not work.
+> planning, and one-shot cleanup for containers, images, volumes, networks, and
+> build cache work from source. Durable protection state, activity history,
+> daemon mode, JSON mode, and the TUI are not implemented or released yet.
+> Commands in planned sections do not work.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
 behind by coding-agent workflows. It targets one Docker host at a time and puts
@@ -71,9 +71,9 @@ before Docker is contacted. Configuration failures exit with code `3`.
 
 ## Available now: read-only plan
 
-`plan` inventories containers, images, volumes, and networks through the Docker
-API. It applies the first matching rule, checks configured protection first,
-and prints only pending removals. It never changes Docker.
+`plan` inventories containers, images, volumes, networks, and build cache
+through the Docker API. It applies the first matching rule, checks configured
+protection first, and prints only pending removals. It never changes Docker.
 
 ```sh
 # Uses ./docker_maid.toml. Exit 1 means removals are pending.
@@ -96,9 +96,13 @@ export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
 cargo run -- plan
 ```
 
-Build-cache records are not included in this implementation slice. A configured
-`rules.build_cache` section still validates, but `plan` does not inventory or
-report build cache yet.
+Build-cache records expose no ownership metadata. Their single rule therefore
+requires `allow_unscoped = true` plus `older_than`, `max_bytes`, or both. Cache
+age uses Docker's last-used timestamp, with creation time as a fallback.
+`max_bytes` selects oldest inactive records until the cache is within budget.
+Records in use or shared with an image are kept. Records with no usable age are
+not selected by an age or oldest-first policy. Every configured cache pass
+emits an authorized-unscoped warning.
 
 ## Available now: one-shot cleanup
 
@@ -125,9 +129,14 @@ parent-image pruning. Image and volume deletion are not forced, and Docker's
 reference checks provide the last barrier against state changes after
 revalidation.
 
+Build-cache deletes use Docker's prune endpoint with one exact cache ID per
+request. Cache graph children are processed before parents. The executor treats
+an empty prune response as a skip and reports any unexpected cache ID returned
+by Docker as a failure.
+
 Only configuration-sourced protection exists in this implementation slice.
 The typed, locked protection state file and activity journal described by the
-PRD remain planned. Build-cache cleanup is also excluded.
+PRD remain planned.
 
 ## Planned daemon execution
 
@@ -172,9 +181,17 @@ Human-authored protection rules will remain in the configuration file.
 Runtime protection entries and activity history will be stored separately
 under `$XDG_STATE_HOME/docker_maid/` with locked, durable writes.
 
-Build-cache records do not expose ownership metadata. A build-cache rule will
-therefore require `allow_unscoped = true` and will emit a warning for every
-planned and applied pass.
+Build-cache records do not expose ownership metadata. Configure their explicit
+escape hatch in bytes and durations:
+
+```toml
+[rules.build_cache]
+older_than = "7d"
+max_bytes = 10737418240
+allow_unscoped = true
+```
+
+The rule emits a warning for every planned and applied pass.
 
 ## Agents and CI
 
@@ -222,9 +239,8 @@ delete request.
 ## Roadmap
 
 - **M0 — Walking skeleton (in progress):** configuration, Docker inventory,
-  dry-run plans, and conservative one-shot cleanup for four resource types.
-- **M1 — Core engine:** build cache, durable protection, daemon mode, and
-  activity history.
+  dry-run plans, and conservative one-shot cleanup for all five resource types.
+- **M1 — Core engine:** durable protection, daemon mode, and activity history.
 - **M2 — v0.1 interfaces:** TUI, stable machine schemas, reports, and releases.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
 

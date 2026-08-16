@@ -201,6 +201,7 @@ dependencies = [
  "os_pipe",
  "regex",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
 ]

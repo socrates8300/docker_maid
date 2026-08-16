@@ -44,6 +44,7 @@ select.names = ["^agent-net-"]
 # cleanup is intentional:
 # [rules.build_cache]
 # older_than = "7d"
+# max_bytes = 10737418240
 # allow_unscoped = true
 
 [report]
@@ -227,6 +228,9 @@ impl Config {
                 build_cache.older_than.as_deref(),
                 &mut errors,
             );
+            if build_cache.older_than.is_none() && build_cache.max_bytes.is_none() {
+                errors.push("rules.build_cache must set older_than, max_bytes, or both".to_owned());
+            }
         }
 
         if errors.is_empty() {
@@ -631,6 +635,25 @@ orphan = true
         let config = Config::parse(source, Path::new("bad.toml")).expect("parse shape");
         let error = config.validate().expect_err("must require authorization");
         assert!(error.to_string().contains("allow_unscoped must be true"));
+    }
+
+    #[test]
+    fn build_cache_requires_a_removal_policy() {
+        let source = "[rules.build_cache]\nallow_unscoped = true\n";
+        let config = Config::parse(source, Path::new("bad.toml")).expect("parse shape");
+        let error = config.validate().expect_err("must require a policy");
+        assert!(error
+            .to_string()
+            .contains("must set older_than, max_bytes, or both"));
+    }
+
+    #[test]
+    fn build_cache_live_fixture_is_valid() {
+        let source = include_str!("../tests/fixtures/build_cache_apply.toml");
+        let config =
+            Config::parse(source, Path::new("build_cache_apply.toml")).expect("parse fixture");
+
+        config.validate().expect("validate fixture");
     }
 
     #[test]

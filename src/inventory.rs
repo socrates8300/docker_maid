@@ -3,9 +3,13 @@
 use crate::config::Config;
 use crate::plan::{InventoryItem, ResourceKind, ResourceState};
 use bollard::errors::Error as BollardError;
-use bollard::models::{ContainerInspectResponse, ContainerSummary, ImageSummary, Network, Volume};
+use bollard::models::{
+    BuildCache, BuildCacheDiskUsage, ContainerInspectResponse, ContainerSummary, ImageSummary,
+    Network, Volume,
+};
 use bollard::query_parameters::{
-    ListContainersOptionsBuilder, ListImagesOptionsBuilder, ListVolumesOptions,
+    DataUsageOptionsBuilder, ListContainersOptionsBuilder, ListImagesOptionsBuilder,
+    ListVolumesOptions,
 };
 use bollard::Docker;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -42,7 +46,7 @@ impl std::error::Error for InventoryError {
     }
 }
 
-/// Inventory the Docker resource types supported by the M0 planner.
+/// Inventory the Docker resource types required by the validated configuration.
 ///
 /// All daemon requests are GET requests. Container inspection is enabled only
 /// when a configured container age policy needs start or finish timestamps.
@@ -51,14 +55,13 @@ impl std::error::Error for InventoryError {
 ///
 /// Returns an error if Docker cannot be reached, a read request fails, or the
 /// daemon omits an identifier required to construct a safe plan target.
-pub async fn collect_inventory(
-    inspect_container_state: bool,
-) -> Result<Vec<InventoryItem>, InventoryError> {
+pub async fn collect_inventory(config: &Config) -> Result<Vec<InventoryItem>, InventoryError> {
     let docker = Docker::connect_with_defaults().map_err(|source| InventoryError::Docker {
         operation: "connection setup".to_owned(),
         source,
     })?;
     let (containers, images, volumes, networks) = read_docker_lists(&docker).await?;
+    let inspect_container_state = needs_container_state(config);
 
     let state_snapshots = if inspect_container_state {
         inspect_container_states(&docker, &containers).await?
@@ -71,10 +74,112 @@ pub async fn collect_inventory(
     inventory.extend(image_items(images, &references.images));
     inventory.extend(volume_items(volumes, &references.volumes));
     inventory.extend(network_items(networks, &references.networks)?);
+    if config.rules.build_cache.is_some() {
+        inventory.extend(read_build_cache(&docker).await?);
+    }
     inventory.sort_by(|left, right| {
         (left.kind, &left.name, &left.id).cmp(&(right.kind, &right.name, &right.id))
     });
     Ok(inventory)
+}
+
+async fn read_build_cache(docker: &Docker) -> Result<Vec<InventoryItem>, InventoryError> {
+    let options = DataUsageOptionsBuilder::default().verbose(true).build();
+    let usage = docker
+        .df(Some(options))
+        .await
+        .map_err(|source| docker_error("build-cache inventory", source))?
+        .build_cache_usage;
+    decode_build_cache_usage(usage)
+}
+
+fn decode_build_cache_usage(
+    usage: Option<BuildCacheDiskUsage>,
+) -> Result<Vec<InventoryItem>, InventoryError> {
+    let records = usage
+        .ok_or_else(|| {
+            InventoryError::InvalidData(
+                "build-cache usage is unavailable on this Docker daemon".to_owned(),
+            )
+        })?
+        .items
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| decode_build_cache(index, value))
+        .collect::<Result<Vec<_>, _>>()?;
+    build_cache_items(records)
+}
+
+fn decode_build_cache(
+    index: usize,
+    mut value: serde_json::Value,
+) -> Result<BuildCache, InventoryError> {
+    if let Some(object) = value.as_object_mut() {
+        if !object.contains_key("Parents") {
+            if let Some(parents) = object.remove(" Parents") {
+                object.insert("Parents".to_owned(), parents);
+            }
+        }
+    }
+    serde_json::from_value(value).map_err(|error| {
+        InventoryError::InvalidData(format!(
+            "build-cache entry {index} cannot be decoded: {error}"
+        ))
+    })
+}
+
+fn build_cache_items(records: Vec<BuildCache>) -> Result<Vec<InventoryItem>, InventoryError> {
+    records
+        .into_iter()
+        .map(|record| {
+            let id = record
+                .id
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    InventoryError::InvalidData("build-cache entry has no ID".to_owned())
+                })?;
+            let description = record
+                .description
+                .map(|value| one_line(&value))
+                .filter(|value| !value.is_empty());
+            let mut parent_ids = record.parents.unwrap_or_default();
+            parent_ids.retain(|value| !value.trim().is_empty());
+            parent_ids.sort();
+            parent_ids.dedup();
+            let cache_type = record
+                .typ
+                .map_or_else(|| "cache".to_owned(), |value| value.to_string());
+            let name = description.clone().unwrap_or_else(|| short_id(&id));
+            let mut search_names = vec![id.clone(), cache_type.clone()];
+            if let Some(description) = description {
+                search_names.push(description);
+            }
+            search_names.sort();
+            search_names.dedup();
+            let created_at = record.created_at.as_deref().and_then(rfc3339_epoch);
+            let state_since = record
+                .last_used_at
+                .as_deref()
+                .and_then(rfc3339_epoch)
+                .or(created_at);
+            Ok(InventoryItem {
+                kind: ResourceKind::BuildCache,
+                id,
+                name,
+                search_names,
+                parent_ids,
+                labels: BTreeMap::new(),
+                state: ResourceState::Other(cache_type),
+                created_at,
+                state_since,
+                size: nonnegative(record.size),
+                referenced: record.in_use.unwrap_or(false) || record.shared.unwrap_or(false),
+                dangling: false,
+                system: false,
+            })
+        })
+        .collect()
 }
 
 /// Return whether container inspection is required for configured state-age rules.
@@ -202,6 +307,7 @@ fn container_items(
             id,
             name,
             search_names,
+            parent_ids: Vec::new(),
             labels: to_btree(container.labels.clone().unwrap_or_default()),
             state,
             created_at: container.created,
@@ -237,6 +343,7 @@ fn image_items(
             id: image.id.clone(),
             name,
             search_names,
+            parent_ids: Vec::new(),
             labels: to_btree(image.labels),
             state: ResourceState::Available,
             created_at: Some(image.created),
@@ -259,6 +366,7 @@ fn volume_items(volumes: Vec<Volume>, referenced_volumes: &HashSet<String>) -> V
             id: name.clone(),
             name: name.clone(),
             search_names: vec![name.clone()],
+            parent_ids: Vec::new(),
             labels: to_btree(volume.labels),
             state: ResourceState::Available,
             created_at: volume.created_at.as_deref().and_then(rfc3339_epoch),
@@ -295,6 +403,7 @@ fn network_items(
             id,
             name: name.clone(),
             search_names,
+            parent_ids: Vec::new(),
             labels: to_btree(network.labels.unwrap_or_default()),
             state: ResourceState::Available,
             created_at: network.created.as_deref().and_then(rfc3339_epoch),
@@ -419,6 +528,10 @@ fn short_id(id: &str) -> String {
         .collect()
 }
 
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn nonnegative(value: Option<i64>) -> Option<u64> {
     value?.try_into().ok()
 }
@@ -455,5 +568,70 @@ mod tests {
     fn short_ids_are_stable_for_digest_and_plain_ids() {
         assert_eq!(short_id("sha256:1234567890abcdef"), "1234567890ab");
         assert_eq!(short_id("abcdef"), "abcdef");
+    }
+
+    #[test]
+    fn maps_build_cache_records_without_inventing_ownership() {
+        let records = vec![
+            BuildCache {
+                id: Some("cache-id-1".to_owned()),
+                typ: Some(bollard::models::BuildCacheTypeEnum::REGULAR),
+                description: Some("RUN  cargo\n build".to_owned()),
+                in_use: Some(false),
+                size: Some(42),
+                created_at: Some("1970-01-01T00:00:01Z".to_owned()),
+                last_used_at: Some("1970-01-01T00:00:02Z".to_owned()),
+                ..Default::default()
+            },
+            BuildCache {
+                id: Some("cache-shared".to_owned()),
+                shared: Some(true),
+                ..Default::default()
+            },
+        ];
+
+        let items = build_cache_items(records).expect("map cache");
+        let item = &items[0];
+        assert_eq!(item.kind, ResourceKind::BuildCache);
+        assert_eq!(item.id, "cache-id-1");
+        assert_eq!(item.name, "RUN cargo build");
+        assert!(item.labels.is_empty());
+        assert_eq!(item.created_at, Some(1));
+        assert_eq!(item.state_since, Some(2));
+        assert_eq!(item.size, Some(42));
+        assert!(!item.referenced);
+        assert!(items[1].referenced);
+    }
+
+    #[test]
+    fn decodes_docker_29_build_cache_parent_key() {
+        let record = decode_build_cache(
+            0,
+            serde_json::json!({
+                "ID": "child",
+                " Parents": ["parent"],
+                "Type": "regular"
+            }),
+        )
+        .expect("decode cache");
+
+        assert_eq!(record.parents, Some(vec!["parent".to_owned()]));
+    }
+
+    #[test]
+    fn rejects_build_cache_without_an_exact_id() {
+        let error = build_cache_items(vec![BuildCache::default()])
+            .expect_err("cache ID is required for exact pruning");
+
+        assert!(error.to_string().contains("build-cache entry has no ID"));
+    }
+
+    #[test]
+    fn rejects_daemons_without_build_cache_inventory() {
+        let error = decode_build_cache_usage(None).expect_err("cache inventory is required");
+
+        assert!(error
+            .to_string()
+            .contains("build-cache usage is unavailable"));
     }
 }

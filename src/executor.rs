@@ -1,13 +1,16 @@
 //! Safety-critical application of an immutable cleanup plan.
 
 use crate::config::{load_config, Config, LoadedConfig};
-use crate::inventory::{collect_inventory, needs_container_state, InventoryError};
+use crate::inventory::{collect_inventory, InventoryError};
 use crate::plan::{build_plan, Action, Decision, Plan, ResourceKind, ResourceState};
 use bollard::errors::Error as BollardError;
+use bollard::models::BuildPruneResponse;
 use bollard::query_parameters::{
-    RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RemoveVolumeOptionsBuilder,
+    PruneBuildOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
+    RemoveVolumeOptionsBuilder,
 };
 use bollard::Docker;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -158,19 +161,22 @@ pub async fn execute_plan(
     initial_plan: &Plan,
 ) -> Result<ExecutionReport, ExecutionError> {
     let docker = Docker::connect_with_defaults().map_err(ExecutionError::DockerSetup)?;
-    let targets = initial_plan
-        .decisions
-        .iter()
-        .filter(|decision| decision.action == Action::Remove)
-        .cloned()
-        .collect::<Vec<_>>();
+    let targets = ordered_removal_targets(initial_plan);
     let mut outcomes = Vec::with_capacity(targets.len());
 
     for target in targets {
         let revalidated = revalidate(config_path, initial_config, initial_source, &target).await;
         let outcome = match revalidated {
             Ok(current) => match delete_target(&docker, &current).await {
-                Ok(()) => target_outcome(&target, TargetStatus::Removed, "removed"),
+                Ok(DeleteEffect::Removed(detail)) => {
+                    target_outcome(&target, TargetStatus::Removed, detail)
+                }
+                Ok(DeleteEffect::Skipped(detail)) => {
+                    target_outcome(&target, TargetStatus::Skipped, detail)
+                }
+                Ok(DeleteEffect::Failed(detail)) => {
+                    target_outcome(&target, TargetStatus::Failed, detail)
+                }
                 Err(source) => {
                     let (status, detail) = classify_delete_error(&source);
                     target_outcome(&target, status, detail)
@@ -182,6 +188,73 @@ pub async fn execute_plan(
     }
 
     Ok(ExecutionReport { outcomes })
+}
+
+fn ordered_removal_targets(plan: &Plan) -> Vec<Decision> {
+    let cache_parents = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.resource.kind == ResourceKind::BuildCache)
+        .map(|decision| {
+            (
+                decision.resource.id.clone(),
+                decision.resource.parent_ids.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut cache_depths = HashMap::new();
+    for id in cache_parents.keys() {
+        cache_depth(id, &cache_parents, &mut cache_depths, &mut HashSet::new());
+    }
+
+    let mut targets = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.action == Action::Remove)
+        .cloned()
+        .collect::<Vec<_>>();
+    targets.sort_by(|left, right| {
+        left.resource
+            .kind
+            .cmp(&right.resource.kind)
+            .then_with(|| {
+                if left.resource.kind == ResourceKind::BuildCache {
+                    cache_depths
+                        .get(&right.resource.id)
+                        .unwrap_or(&0)
+                        .cmp(cache_depths.get(&left.resource.id).unwrap_or(&0))
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .then_with(|| left.resource.name.cmp(&right.resource.name))
+            .then_with(|| left.resource.id.cmp(&right.resource.id))
+    });
+    targets
+}
+
+fn cache_depth(
+    id: &str,
+    parents: &HashMap<String, Vec<String>>,
+    memo: &mut HashMap<String, usize>,
+    visiting: &mut HashSet<String>,
+) -> usize {
+    if let Some(depth) = memo.get(id) {
+        return *depth;
+    }
+    if !visiting.insert(id.to_owned()) {
+        return 0;
+    }
+    let depth = parents.get(id).map_or(0, |ids| {
+        ids.iter()
+            .filter(|parent| parents.contains_key(parent.as_str()))
+            .map(|parent| cache_depth(parent, parents, memo, visiting).saturating_add(1))
+            .max()
+            .unwrap_or(0)
+    });
+    visiting.remove(id);
+    memo.insert(id.to_owned(), depth);
+    depth
 }
 
 async fn revalidate(
@@ -196,7 +269,7 @@ async fn revalidate(
         return Err("configuration changed after the plan was created".to_owned());
     }
 
-    let inventory = collect_inventory(needs_container_state(&loaded.config))
+    let inventory = collect_inventory(&loaded.config)
         .await
         .map_err(|error| revalidation_inventory_error(&error))?;
     let now = epoch_seconds().map_err(|error| format!("revalidation failed: {error}"))?;
@@ -232,7 +305,14 @@ fn select_revalidated_target<'a>(
     Ok(current)
 }
 
-async fn delete_target(docker: &Docker, target: &Decision) -> Result<(), BollardError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeleteEffect {
+    Removed(String),
+    Skipped(String),
+    Failed(String),
+}
+
+async fn delete_target(docker: &Docker, target: &Decision) -> Result<DeleteEffect, BollardError> {
     match target.resource.kind {
         ResourceKind::Container => {
             let options = RemoveContainerOptionsBuilder::default()
@@ -243,6 +323,7 @@ async fn delete_target(docker: &Docker, target: &Decision) -> Result<(), Bollard
             docker
                 .remove_container(&target.resource.id, Some(options))
                 .await
+                .map(|()| DeleteEffect::Removed("removed".to_owned()))
         }
         ResourceKind::Image => {
             let options = RemoveImageOptionsBuilder::default()
@@ -252,16 +333,53 @@ async fn delete_target(docker: &Docker, target: &Decision) -> Result<(), Bollard
             docker
                 .remove_image(&target.resource.id, Some(options), None)
                 .await
-                .map(|_| ())
+                .map(|_| DeleteEffect::Removed("removed".to_owned()))
         }
         ResourceKind::Volume => {
             let options = RemoveVolumeOptionsBuilder::default().force(false).build();
             docker
                 .remove_volume(&target.resource.id, Some(options))
                 .await
+                .map(|()| DeleteEffect::Removed("removed".to_owned()))
         }
-        ResourceKind::Network => docker.remove_network(&target.resource.id).await,
+        ResourceKind::Network => docker
+            .remove_network(&target.resource.id)
+            .await
+            .map(|()| DeleteEffect::Removed("removed".to_owned())),
+        ResourceKind::BuildCache => {
+            let filters = HashMap::from([("id", vec![target.resource.id.clone()])]);
+            let options = PruneBuildOptionsBuilder::default()
+                .all(true)
+                .filters(&filters)
+                .build();
+            docker
+                .prune_build(Some(options))
+                .await
+                .map(|response| classify_prune_response(&target.resource.id, &response))
+        }
     }
+}
+
+fn classify_prune_response(target_id: &str, response: &BuildPruneResponse) -> DeleteEffect {
+    let deleted = response.caches_deleted.as_deref().unwrap_or_default();
+    let unexpected = deleted
+        .iter()
+        .filter(|id| id.as_str() != target_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return DeleteEffect::Failed(format!(
+            "Docker reported unexpected build-cache deletions: {}",
+            unexpected.join(", ")
+        ));
+    }
+    if deleted.iter().any(|id| id == target_id) {
+        return DeleteEffect::Removed(format!(
+            "removed; reclaimed {} bytes",
+            response.space_reclaimed.unwrap_or(0).max(0)
+        ));
+    }
+    DeleteEffect::Skipped("Docker did not delete the build-cache record".to_owned())
 }
 
 fn classify_delete_error(source: &BollardError) -> (TargetStatus, String) {
@@ -324,6 +442,7 @@ mod tests {
                 id: "volume-1".to_owned(),
                 name: "volume-1".to_owned(),
                 search_names: vec!["volume-1".to_owned()],
+                parent_ids: Vec::new(),
                 labels: BTreeMap::new(),
                 state: ResourceState::Available,
                 created_at: Some(1),
@@ -420,5 +539,54 @@ mod tests {
         };
 
         assert!(!configuration_is_unchanged(&initial_config, "", &current));
+    }
+
+    #[test]
+    fn build_cache_prune_response_must_name_only_the_exact_target() {
+        let removed = classify_prune_response(
+            "cache-1",
+            &BuildPruneResponse {
+                caches_deleted: Some(vec!["cache-1".to_owned()]),
+                space_reclaimed: Some(42),
+            },
+        );
+        assert_eq!(
+            removed,
+            DeleteEffect::Removed("removed; reclaimed 42 bytes".to_owned())
+        );
+
+        let none = classify_prune_response("cache-1", &BuildPruneResponse::default());
+        assert!(matches!(none, DeleteEffect::Skipped(_)));
+
+        let unexpected = classify_prune_response(
+            "cache-1",
+            &BuildPruneResponse {
+                caches_deleted: Some(vec!["cache-1".to_owned(), "cache-2".to_owned()]),
+                space_reclaimed: Some(42),
+            },
+        );
+        assert!(matches!(unexpected, DeleteEffect::Failed(_)));
+    }
+
+    #[test]
+    fn build_cache_targets_are_ordered_child_before_parent() {
+        let mut parent = decision(Action::Remove, false, "build-cache");
+        parent.resource.kind = ResourceKind::BuildCache;
+        parent.resource.id = "parent".to_owned();
+        parent.resource.name = "parent".to_owned();
+        let mut child = decision(Action::Remove, false, "build-cache");
+        child.resource.kind = ResourceKind::BuildCache;
+        child.resource.id = "child".to_owned();
+        child.resource.name = "child".to_owned();
+        child.resource.parent_ids = vec!["parent".to_owned()];
+
+        let targets = ordered_removal_targets(&Plan {
+            decisions: vec![parent, child],
+        });
+        let ids = targets
+            .iter()
+            .map(|target| target.resource.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["child", "parent"]);
     }
 }

@@ -1,0 +1,3 @@
+[rules.build_cache]
+older_than = "1s"
+allow_unscoped = true

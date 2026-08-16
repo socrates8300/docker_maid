@@ -1,6 +1,6 @@
 //! Pure policy evaluation and deterministic dry-run plan rendering.
 
-use crate::config::{CommonRule, Config, RuleScope, Selectors};
+use crate::config::{BuildCacheRule, CommonRule, Config, RuleScope, Selectors};
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -13,6 +13,7 @@ pub enum ResourceKind {
     Image,
     Volume,
     Network,
+    BuildCache,
 }
 
 impl fmt::Display for ResourceKind {
@@ -22,6 +23,7 @@ impl fmt::Display for ResourceKind {
             Self::Image => "image",
             Self::Volume => "volume",
             Self::Network => "network",
+            Self::BuildCache => "build-cache",
         };
         formatter.write_str(value)
     }
@@ -52,6 +54,7 @@ pub struct InventoryItem {
     pub id: String,
     pub name: String,
     pub search_names: Vec<String>,
+    pub parent_ids: Vec<String>,
     pub labels: BTreeMap<String, String>,
     pub state: ResourceState,
     pub created_at: Option<i64>,
@@ -232,9 +235,10 @@ pub fn build_plan(
     now_epoch_seconds: i64,
 ) -> Result<Plan, PlanError> {
     let policy = CompiledPolicy::compile(config)?;
+    let build_cache_removals = policy.build_cache_removals(&inventory, now_epoch_seconds);
     let mut decisions = inventory
         .into_iter()
-        .map(|item| policy.decide(item, now_epoch_seconds))
+        .map(|item| policy.decide(item, now_epoch_seconds, &build_cache_removals))
         .collect::<Vec<_>>();
     decisions.sort_by(|left, right| {
         (left.resource.kind, &left.resource.name, &left.resource.id).cmp(&(
@@ -252,6 +256,7 @@ struct CompiledPolicy {
     images: Vec<CompiledImageRule>,
     volumes: Vec<CompiledVolumeRule>,
     networks: Vec<CompiledNetworkRule>,
+    build_cache: Option<CompiledBuildCacheRule>,
 }
 
 impl CompiledPolicy {
@@ -339,16 +344,29 @@ impl CompiledPolicy {
             })
             .collect::<Result<Vec<_>, PlanError>>()?;
 
+        let build_cache = config
+            .rules
+            .build_cache
+            .as_ref()
+            .map(CompiledBuildCacheRule::compile)
+            .transpose()?;
+
         Ok(Self {
             protection,
             containers,
             images,
             volumes,
             networks,
+            build_cache,
         })
     }
 
-    fn decide(&self, item: InventoryItem, now: i64) -> Decision {
+    fn decide(
+        &self,
+        item: InventoryItem,
+        now: i64,
+        build_cache_removals: &BTreeMap<String, String>,
+    ) -> Decision {
         if let Some(reason) = self.protection.match_reason(&item) {
             return keep(item, Disposition::Protected, None, reason);
         }
@@ -358,6 +376,7 @@ impl CompiledPolicy {
             ResourceKind::Image => self.decide_image(item, now),
             ResourceKind::Volume => self.decide_volume(item, now),
             ResourceKind::Network => self.decide_network(item, now),
+            ResourceKind::BuildCache => self.decide_build_cache(item, now, build_cache_removals),
         }
     }
 
@@ -546,6 +565,119 @@ impl CompiledPolicy {
         }
         unowned(item)
     }
+
+    fn build_cache_removals(
+        &self,
+        inventory: &[InventoryItem],
+        now: i64,
+    ) -> BTreeMap<String, String> {
+        let Some(rule) = &self.build_cache else {
+            return BTreeMap::new();
+        };
+        let cache = inventory
+            .iter()
+            .filter(|item| item.kind == ResourceKind::BuildCache)
+            .collect::<Vec<_>>();
+        let total_bytes = cache
+            .iter()
+            .filter_map(|item| item.size)
+            .fold(0_u64, u64::saturating_add);
+        let mut removals = BTreeMap::new();
+
+        if let Some(threshold) = rule.older_than {
+            for item in &cache {
+                if item.referenced {
+                    continue;
+                }
+                let age = age_seconds(now, item.state_since.or(item.created_at));
+                if age.is_some_and(|seconds| seconds >= threshold.as_secs()) {
+                    removals.insert(
+                        item.id.clone(),
+                        format!(
+                            "authorized-unscoped build cache; last-use age {} meets {}",
+                            format_duration(age.unwrap_or_default()),
+                            format_duration(threshold.as_secs())
+                        ),
+                    );
+                }
+            }
+        }
+
+        let selected_bytes = cache
+            .iter()
+            .filter(|item| removals.contains_key(&item.id))
+            .filter_map(|item| item.size)
+            .fold(0_u64, u64::saturating_add);
+        let mut retained_bytes = total_bytes.saturating_sub(selected_bytes);
+        if let Some(max_bytes) = rule.max_bytes {
+            let mut candidates = cache
+                .iter()
+                .filter(|item| !item.referenced && !removals.contains_key(&item.id))
+                .filter(|item| item.size.is_some())
+                .filter_map(|item| {
+                    item.state_since
+                        .or(item.created_at)
+                        .map(|last_used| (*item, last_used))
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by(|(left, left_used), (right, right_used)| {
+                (left_used, &left.id).cmp(&(right_used, &right.id))
+            });
+            for (item, _) in candidates {
+                if retained_bytes <= max_bytes {
+                    break;
+                }
+                removals.insert(
+                    item.id.clone(),
+                    format!(
+                        "authorized-unscoped build cache; oldest-first removal reduces cache from {total_bytes} bytes toward {max_bytes} bytes"
+                    ),
+                );
+                retained_bytes = retained_bytes.saturating_sub(item.size.unwrap_or(0));
+            }
+        }
+        removals
+    }
+
+    fn decide_build_cache(
+        &self,
+        item: InventoryItem,
+        now: i64,
+        removals: &BTreeMap<String, String>,
+    ) -> Decision {
+        if self.build_cache.is_none() {
+            return unowned(item);
+        }
+        let age = age_seconds(now, item.state_since.or(item.created_at));
+        if item.referenced {
+            return keep(
+                item,
+                Disposition::AuthorizedUnscoped,
+                Some("build-cache".to_owned()),
+                "authorized-unscoped build cache is in use or shared with an image".to_owned(),
+            );
+        }
+        if let Some(reason) = removals.get(&item.id) {
+            return remove(
+                item,
+                Disposition::AuthorizedUnscoped,
+                "build-cache",
+                age,
+                reason.clone(),
+            );
+        }
+        let reason = if age.is_none() {
+            "authorized-unscoped build cache has no usable age; kept conservatively"
+        } else {
+            "authorized-unscoped build cache does not meet the configured age or budget policy"
+        };
+        keep(
+            item,
+            Disposition::AuthorizedUnscoped,
+            Some("build-cache".to_owned()),
+            reason.to_owned(),
+        )
+    }
 }
 
 struct CompiledCommonRule {
@@ -592,6 +724,23 @@ struct CompiledVolumeRule {
 struct CompiledNetworkRule {
     common: CompiledCommonRule,
     orphan: bool,
+}
+
+struct CompiledBuildCacheRule {
+    older_than: Option<Duration>,
+    max_bytes: Option<u64>,
+}
+
+impl CompiledBuildCacheRule {
+    fn compile(rule: &BuildCacheRule) -> Result<Self, PlanError> {
+        Ok(Self {
+            older_than: parse_optional_duration(
+                "rules.build_cache.older_than",
+                rule.older_than.as_deref(),
+            )?,
+            max_bytes: rule.max_bytes,
+        })
+    }
 }
 
 struct SelectorMatcher {
@@ -764,6 +913,7 @@ struct ResourceCounts {
     images: usize,
     volumes: usize,
     networks: usize,
+    build_cache: usize,
 }
 
 impl ResourceCounts {
@@ -775,6 +925,7 @@ impl ResourceCounts {
                 ResourceKind::Image => counts.images += 1,
                 ResourceKind::Volume => counts.volumes += 1,
                 ResourceKind::Network => counts.networks += 1,
+                ResourceKind::BuildCache => counts.build_cache += 1,
             }
         }
         counts
@@ -782,8 +933,8 @@ impl ResourceCounts {
 
     fn render(&self, label: &str) -> String {
         format!(
-            "{label}: containers={} images={} volumes={} networks={}",
-            self.containers, self.images, self.volumes, self.networks
+            "{label}: containers={} images={} volumes={} networks={} build_cache={}",
+            self.containers, self.images, self.volumes, self.networks, self.build_cache
         )
     }
 }
@@ -807,6 +958,7 @@ mod tests {
             id: format!("id-{name}"),
             name: name.to_owned(),
             search_names: vec![name.to_owned()],
+            parent_ids: Vec::new(),
             labels: BTreeMap::new(),
             state: ResourceState::Available,
             created_at: Some(NOW - 86_400),
@@ -819,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluates_all_four_resource_types_and_sorts_output() {
+    fn evaluates_owned_resource_types_and_sorts_output() {
         let config = config(
             r#"
 [[rules.containers]]
@@ -870,9 +1022,73 @@ orphan = true
                 "volume     agent-v         available  1d   owned        volumes     remove  matched label agent.volume=true (agent.volume=true); unattached and resource age 1d meets 1h\n",
                 "network    agent-n         available  1d   owned        networks    remove  matched name regex ^agent-n; user-defined network has no containers\n",
                 "\nPending removals: 4\n",
-                "Scanned: containers=1 images=1 volumes=1 networks=1\n",
+                "Scanned: containers=1 images=1 volumes=1 networks=1 build_cache=0\n",
             )
         );
+    }
+
+    #[test]
+    fn build_cache_age_and_budget_are_deterministic_and_unscoped() {
+        let config = config(
+            r#"
+[rules.build_cache]
+older_than = "12h"
+max_bytes = 100
+allow_unscoped = true
+"#,
+        );
+        let mut old = item(ResourceKind::BuildCache, "old-cache");
+        old.state_since = Some(NOW - 86_400);
+        old.size = Some(40);
+        let mut oldest = item(ResourceKind::BuildCache, "oldest-cache");
+        oldest.state_since = Some(NOW - 7_200);
+        oldest.size = Some(80);
+        let mut newest = item(ResourceKind::BuildCache, "newest-cache");
+        newest.state_since = Some(NOW - 3_600);
+        newest.size = Some(80);
+        let mut in_use = item(ResourceKind::BuildCache, "in-use-cache");
+        in_use.state_since = Some(NOW - 86_400);
+        in_use.size = Some(0);
+        in_use.referenced = true;
+
+        let plan = build_plan(&config, vec![newest, in_use, oldest, old], NOW).expect("plan");
+        let removals = plan
+            .decisions
+            .iter()
+            .filter(|decision| decision.action == Action::Remove)
+            .map(|decision| decision.resource.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(removals, vec!["old-cache", "oldest-cache"]);
+        assert!(plan.decisions.iter().all(|decision| {
+            decision.disposition == Disposition::AuthorizedUnscoped
+                && decision.matched_rule.as_deref() == Some("build-cache")
+        }));
+        let in_use = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.resource.name == "in-use-cache")
+            .expect("in-use decision");
+        assert_eq!(in_use.action, Action::Keep);
+        assert!(in_use.reason.contains("in use"));
+    }
+
+    #[test]
+    fn build_cache_budget_keeps_unknown_size_records() {
+        let config = config(
+            r"
+[rules.build_cache]
+max_bytes = 0
+allow_unscoped = true
+",
+        );
+        let mut unknown = item(ResourceKind::BuildCache, "unknown-size");
+        unknown.state_since = Some(NOW - 86_400);
+
+        let plan = build_plan(&config, vec![unknown], NOW).expect("plan");
+
+        assert_eq!(plan.pending_count(), 0);
+        assert_eq!(plan.decisions[0].action, Action::Keep);
     }
 
     #[test]
@@ -974,7 +1190,7 @@ dangling = true
         assert_eq!(plan.pending_count(), 0);
         assert_eq!(
             plan.render_table(),
-            "No removals pending.\nScanned: containers=1 images=1 volumes=0 networks=0\n"
+            "No removals pending.\nScanned: containers=1 images=1 volumes=0 networks=0 build_cache=0\n"
         );
     }
 
