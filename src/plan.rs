@@ -1,6 +1,7 @@
 //! Pure policy evaluation and deterministic dry-run plan rendering.
 
 use crate::config::{BuildCacheRule, CommonRule, Config, RuleScope, Selectors};
+use crate::state::ProtectionState;
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -234,11 +235,37 @@ pub fn build_plan(
     inventory: Vec<InventoryItem>,
     now_epoch_seconds: i64,
 ) -> Result<Plan, PlanError> {
+    build_plan_with_protection(
+        config,
+        inventory,
+        now_epoch_seconds,
+        &ProtectionState::default(),
+    )
+}
+
+/// Evaluate configuration and machine-managed protection against an inventory.
+///
+/// # Errors
+///
+/// Returns an error if a selector or duration cannot be compiled.
+pub fn build_plan_with_protection(
+    config: &Config,
+    inventory: Vec<InventoryItem>,
+    now_epoch_seconds: i64,
+    runtime_protection: &ProtectionState,
+) -> Result<Plan, PlanError> {
     let policy = CompiledPolicy::compile(config)?;
     let build_cache_removals = policy.build_cache_removals(&inventory, now_epoch_seconds);
     let mut decisions = inventory
         .into_iter()
-        .map(|item| policy.decide(item, now_epoch_seconds, &build_cache_removals))
+        .map(|item| {
+            policy.decide(
+                item,
+                now_epoch_seconds,
+                &build_cache_removals,
+                runtime_protection,
+            )
+        })
         .collect::<Vec<_>>();
     decisions.sort_by(|left, right| {
         (left.resource.kind, &left.resource.name, &left.resource.id).cmp(&(
@@ -366,7 +393,11 @@ impl CompiledPolicy {
         item: InventoryItem,
         now: i64,
         build_cache_removals: &BTreeMap<String, String>,
+        runtime_protection: &ProtectionState,
     ) -> Decision {
+        if let Some(reason) = runtime_protection.match_reason(&item) {
+            return keep(item, Disposition::Protected, None, reason);
+        }
         if let Some(reason) = self.protection.match_reason(&item) {
             return keep(item, Disposition::Protected, None, reason);
         }
@@ -1119,6 +1150,56 @@ orphan = true
         assert_eq!(decision.disposition, Disposition::Protected);
         assert_eq!(decision.action, Action::Keep);
         assert_eq!(decision.matched_rule, None);
+    }
+
+    #[test]
+    fn typed_runtime_protection_wins_without_affecting_other_resource_kinds() {
+        use crate::state::{ProtectionEntry, ProtectionKind, ProtectionState};
+
+        let config = config(
+            r#"
+[[rules.networks]]
+name = "networks"
+select.names = ["^shared$"]
+orphan = true
+
+[[rules.volumes]]
+name = "volumes"
+select.names = ["^shared$"]
+orphan_for = "1s"
+"#,
+        );
+        let mut volume = item(ResourceKind::Volume, "shared");
+        volume.created_at = Some(NOW - 60);
+        let protection = ProtectionState {
+            schema_version: 1,
+            entries: vec![ProtectionEntry {
+                kind: ProtectionKind::Network,
+                value: "shared".to_owned(),
+            }],
+        };
+
+        let plan = build_plan_with_protection(
+            &config,
+            vec![item(ResourceKind::Network, "shared"), volume],
+            NOW,
+            &protection,
+        )
+        .expect("plan");
+
+        let network = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.resource.kind == ResourceKind::Network)
+            .expect("network decision");
+        let volume = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.resource.kind == ResourceKind::Volume)
+            .expect("volume decision");
+        assert_eq!(network.disposition, Disposition::Protected);
+        assert_eq!(network.action, Action::Keep);
+        assert_eq!(volume.action, Action::Remove);
     }
 
     #[test]

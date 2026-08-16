@@ -11,6 +11,7 @@ repository = "https://github.com/socrates8300/docker_maid"
 bollard = { version = "0.21", default-features = false, features = ["http", "pipe"] }
 clap = { version = "4.5", features = ["derive"] }
 futures-util = "0.3"
+fs2 = "0.4"
 globset = "0.4"
 humantime = "2.3"
 regex = "1.11"

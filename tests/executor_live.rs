@@ -7,6 +7,7 @@ use docker_maid::config::{load_config, Config};
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
 use docker_maid::inventory::collect_inventory;
 use docker_maid::plan::{build_plan, Action, Plan, ResourceKind};
+use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -128,6 +129,10 @@ fn run_applied_with_stdout(config: &Path, stdout: impl Into<Stdio>) -> Output {
             "clean",
             "--apply",
         ])
+        .env(
+            "XDG_STATE_HOME",
+            config.parent().expect("live config parent").join("state"),
+        )
         .stdout(stdout)
         .stderr(Stdio::piped())
         .output()
@@ -143,6 +148,7 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
     let docker = Docker::connect_with_defaults().expect("connect to live Docker");
     let root = temp_dir();
     let unique = root.file_name().expect("temporary name").to_string_lossy();
+    let store = ProtectionStore::new(StatePaths::new(root.join("runtime-state")));
 
     let referenced_network = format!("{unique}-referenced");
     let reference_container = format!("{unique}-keeper");
@@ -155,10 +161,15 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
     assert_network_target(&plan, &referenced_network);
     let keeper_id =
         create_network_reference(&docker, &reference_container, &referenced_network).await;
-    let referenced_report =
-        execute_plan(&referenced_config, &initial_config, &initial_source, &plan)
-            .await
-            .expect("execute referenced plan");
+    let referenced_report = execute_plan(
+        &referenced_config,
+        &initial_config,
+        &initial_source,
+        &plan,
+        &store,
+    )
+    .await
+    .expect("execute referenced plan");
     let referenced_exists = docker
         .inspect_network(&referenced_network, None)
         .await
@@ -179,20 +190,65 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
         network_config(&protected_label, Some(&protected_network)),
     )
     .expect("change protection after plan capture");
-    let protected_report = execute_plan(&protected_config, &initial_config, &initial_source, &plan)
-        .await
-        .expect("execute stale plan");
+    let protected_report = execute_plan(
+        &protected_config,
+        &initial_config,
+        &initial_source,
+        &plan,
+        &store,
+    )
+    .await
+    .expect("execute stale plan");
     let protected_exists = docker
         .inspect_network(&protected_network, None)
         .await
         .is_ok();
     let _ = docker.remove_network(&protected_network).await;
+
     fs::remove_dir_all(root).expect("remove live test directory");
 
     assert!(referenced_exists, "newly referenced network was deleted");
     assert_one_skip(&referenced_report, "became ineligible");
     assert!(protected_exists, "newly protected network was deleted");
     assert_one_skip(&protected_report, "configuration changed");
+}
+
+#[tokio::test]
+async fn live_delete_time_revalidation_honors_new_runtime_protection() {
+    if !live_test_enabled() {
+        return;
+    }
+
+    let docker = Docker::connect_with_defaults().expect("connect to live Docker");
+    let root = temp_dir();
+    let unique = root.file_name().expect("temporary name").to_string_lossy();
+    let network = format!("{unique}-runtime-protected");
+    let label = format!("{unique}-runtime-protection");
+    let config_path = root.join("runtime-protected.toml");
+    create_network(&docker, &network, &label).await;
+    fs::write(&config_path, network_config(&label, None)).expect("write runtime protection config");
+    let (initial_config, initial_source, plan) = capture_plan(&config_path).await;
+    assert_network_target(&plan, &network);
+
+    let store = ProtectionStore::new(StatePaths::new(root.join("runtime-state")));
+    store
+        .add(ProtectionKind::Network, std::slice::from_ref(&network))
+        .expect("persist runtime protection");
+    let report = execute_plan(
+        &config_path,
+        &initial_config,
+        &initial_source,
+        &plan,
+        &store,
+    )
+    .await
+    .expect("execute runtime-protected plan");
+    let still_exists = docker.inspect_network(&network, None).await.is_ok();
+
+    let _ = docker.remove_network(&network).await;
+    fs::remove_dir_all(root).expect("remove live test directory");
+    assert!(still_exists, "newly runtime-protected network was deleted");
+    assert_one_skip(&report, "runtime protection");
 }
 
 #[tokio::test]

@@ -2,7 +2,10 @@
 
 use crate::config::{load_config, Config, LoadedConfig};
 use crate::inventory::{collect_inventory, InventoryError};
-use crate::plan::{build_plan, Action, Decision, Plan, ResourceKind, ResourceState};
+use crate::plan::{
+    build_plan_with_protection, Action, Decision, Plan, ResourceKind, ResourceState,
+};
+use crate::state::{ProtectionState, ProtectionStore, StateError};
 use bollard::errors::Error as BollardError;
 use bollard::models::BuildPruneResponse;
 use bollard::query_parameters::{
@@ -19,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 pub enum ExecutionError {
     DockerSetup(BollardError),
+    State(StateError),
 }
 
 impl fmt::Display for ExecutionError {
@@ -30,6 +34,7 @@ impl fmt::Display for ExecutionError {
                     "Docker deletion connection setup failed: {source}"
                 )
             }
+            Self::State(source) => write!(formatter, "protection state failed: {source}"),
         }
     }
 }
@@ -38,6 +43,7 @@ impl std::error::Error for ExecutionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DockerSetup(source) => Some(source),
+            Self::State(source) => Some(source),
         }
     }
 }
@@ -151,43 +157,74 @@ impl ExecutionReport {
 ///
 /// # Errors
 ///
-/// Returns an error only when the deletion client cannot be constructed. Once
-/// target processing starts, individual revalidation and deletion failures are
-/// retained in the report so one failure cannot hide successful deletions.
+/// Returns an error when the deletion client cannot be constructed or fresh
+/// runtime protection state cannot be locked and loaded. Once target processing
+/// starts, individual Docker revalidation and deletion failures are retained in
+/// the report so one failure cannot hide successful deletions.
 pub async fn execute_plan(
     config_path: &Path,
     initial_config: &Config,
     initial_source: &str,
     initial_plan: &Plan,
+    protection_store: &ProtectionStore,
 ) -> Result<ExecutionReport, ExecutionError> {
     let docker = Docker::connect_with_defaults().map_err(ExecutionError::DockerSetup)?;
     let targets = ordered_removal_targets(initial_plan);
     let mut outcomes = Vec::with_capacity(targets.len());
 
     for target in targets {
-        let revalidated = revalidate(config_path, initial_config, initial_source, &target).await;
-        let outcome = match revalidated {
-            Ok(current) => match delete_target(&docker, &current).await {
-                Ok(DeleteEffect::Removed(detail)) => {
-                    target_outcome(&target, TargetStatus::Removed, detail)
-                }
-                Ok(DeleteEffect::Skipped(detail)) => {
-                    target_outcome(&target, TargetStatus::Skipped, detail)
-                }
-                Ok(DeleteEffect::Failed(detail)) => {
-                    target_outcome(&target, TargetStatus::Failed, detail)
-                }
-                Err(source) => {
-                    let (status, detail) = classify_delete_error(&source);
-                    target_outcome(&target, status, detail)
-                }
-            },
-            Err(detail) => target_outcome(&target, TargetStatus::Skipped, detail),
-        };
+        let protection = protection_store
+            .locked_snapshot()
+            .map_err(ExecutionError::State)?;
+        let outcome = process_target(
+            &docker,
+            config_path,
+            initial_config,
+            initial_source,
+            &target,
+            protection.state(),
+        )
+        .await;
         outcomes.push(outcome);
     }
 
     Ok(ExecutionReport { outcomes })
+}
+
+async fn process_target(
+    docker: &Docker,
+    config_path: &Path,
+    initial_config: &Config,
+    initial_source: &str,
+    target: &Decision,
+    runtime_protection: &ProtectionState,
+) -> TargetOutcome {
+    let revalidated = revalidate(
+        config_path,
+        initial_config,
+        initial_source,
+        target,
+        runtime_protection,
+    )
+    .await;
+    match revalidated {
+        Ok(current) => match delete_target(docker, &current).await {
+            Ok(DeleteEffect::Removed(detail)) => {
+                target_outcome(target, TargetStatus::Removed, detail)
+            }
+            Ok(DeleteEffect::Skipped(detail)) => {
+                target_outcome(target, TargetStatus::Skipped, detail)
+            }
+            Ok(DeleteEffect::Failed(detail)) => {
+                target_outcome(target, TargetStatus::Failed, detail)
+            }
+            Err(source) => {
+                let (status, detail) = classify_delete_error(&source);
+                target_outcome(target, status, detail)
+            }
+        },
+        Err(detail) => target_outcome(target, TargetStatus::Skipped, detail),
+    }
 }
 
 fn ordered_removal_targets(plan: &Plan) -> Vec<Decision> {
@@ -262,6 +299,7 @@ async fn revalidate(
     initial_config: &Config,
     initial_source: &str,
     target: &Decision,
+    runtime_protection: &ProtectionState,
 ) -> Result<Decision, String> {
     let loaded = load_config(Some(config_path), Path::new("."), None)
         .map_err(|error| format!("revalidation could not load configuration: {error}"))?;
@@ -273,8 +311,9 @@ async fn revalidate(
         .await
         .map_err(|error| revalidation_inventory_error(&error))?;
     let now = epoch_seconds().map_err(|error| format!("revalidation failed: {error}"))?;
-    let current_plan = build_plan(&loaded.config, inventory, now)
-        .map_err(|error| format!("revalidation could not rebuild the plan: {error}"))?;
+    let current_plan =
+        build_plan_with_protection(&loaded.config, inventory, now, runtime_protection)
+            .map_err(|error| format!("revalidation could not rebuild the plan: {error}"))?;
     select_revalidated_target(target, &current_plan).cloned()
 }
 

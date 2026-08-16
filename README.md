@@ -5,9 +5,9 @@
 > [!IMPORTANT]
 > **Project status: early implementation.** Strict configuration, read-only
 > planning, and one-shot cleanup for containers, images, volumes, networks, and
-> build cache work from source. Durable protection state, activity history,
-> daemon mode, JSON mode, and the TUI are not implemented or released yet.
-> Commands in planned sections do not work.
+> build cache work from source. Typed runtime protection and durable cleanup
+> activity history also work from source. Daemon mode, JSON mode, and the TUI
+> are not implemented or released yet. Commands in planned sections do not work.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
 behind by coding-agent workflows. It targets one Docker host at a time and puts
@@ -33,6 +33,7 @@ The deletion contract is the same in every interface:
 - Non-interactive commands are dry-run unless `--apply` is present.
 - The planned TUI can apply only a policy-generated, immutable plan after
   confirmation.
+- The protected set is the union of configuration and typed runtime state.
 - Protected resources always win over cleanup rules.
 - Every target must still match its rule immediately before deletion.
 - Delete-time revalidation can remove targets from a plan, but never add them.
@@ -72,7 +73,7 @@ before Docker is contacted. Configuration failures exit with code `3`.
 ## Available now: read-only plan
 
 `plan` inventories containers, images, volumes, networks, and build cache
-through the Docker API. It applies the first matching rule, checks configured
+through the Docker API. It applies the first matching rule, checks effective
 protection first, and prints only pending removals. It never changes Docker.
 
 ```sh
@@ -134,9 +135,41 @@ request. Cache graph children are processed before parents. The executor treats
 an empty prune response as a skip and reports any unexpected cache ID returned
 by Docker as a failure.
 
-Only configuration-sourced protection exists in this implementation slice.
-The typed, locked protection state file and activity journal described by the
-PRD remain planned.
+## Available now: durable protection and activity
+
+Runtime protection entries are typed and non-interactive:
+
+```sh
+docker_maid protect container '^agent-session-important$'
+docker_maid protect image agent-base:latest
+docker_maid protect volume workspace-data
+docker_maid protect network shared-services
+
+docker_maid unprotect network shared-services
+```
+
+Entries persist in `$XDG_STATE_HOME/docker_maid/protection.toml`, or
+`~/.local/state/docker_maid/protection.toml` when `XDG_STATE_HOME` is unset.
+Concurrent writers use one exclusive lock and an atomic, durable file
+replacement. The state directory is mode `0700` and its files are mode `0600`
+on Unix. Repeated `protect` and `unprotect` operations are idempotent.
+
+Configuration `[protect]` entries and runtime entries form one protected set.
+`unprotect` cannot remove a matching configuration-sourced name; its diagnostic
+points to the configuration field that must be edited. Before each delete, the
+executor reloads runtime state under a shared inter-process lock and holds that
+lock through the Docker request.
+
+Every `clean --apply` pass appends schema-versioned, correlated events to
+`activity.jsonl`. Complete records are serialized across processes. History is
+bounded to 10,000 events and 5 MiB. `status` reports current disposition counts
+and the most recent completed pass after a process restart:
+
+```sh
+docker_maid status
+```
+
+Protection or activity state failures stop the command with exit code `6`.
 
 ## Planned daemon execution
 
@@ -177,9 +210,9 @@ stopped_ttl = "2h"
 adopt = true
 ```
 
-Human-authored protection rules will remain in the configuration file.
-Runtime protection entries and activity history will be stored separately
-under `$XDG_STATE_HOME/docker_maid/` with locked, durable writes.
+Human-authored protection rules remain in the configuration file. Runtime
+protection entries and activity history are stored separately under
+`$XDG_STATE_HOME/docker_maid/` with locked, durable writes.
 
 Build-cache records do not expose ownership metadata. Configure their explicit
 escape hatch in bytes and durations:
@@ -195,7 +228,8 @@ The rule emits a warning for every planned and applied pass.
 
 ## Agents and CI
 
-Agent workflows will not need a pseudo-terminal or Docker CLI output parsing:
+The current table-form `status` command is available now. Versioned JSON and
+daemon streams remain planned for agent workflows:
 
 ```sh
 # Inspect config, inventory, dispositions, history, and disk usage.
@@ -226,10 +260,11 @@ exit codes are:
 
 ## Architecture
 
-The implemented configuration, planning, and one-shot execution slices use
-`clap`, `serde`, `toml`, `humantime`, `regex`, and `globset`. The Docker adapter
-uses `bollard` and `tokio` without shelling out. Planned runtime layers will use
-`ratatui` with `crossterm` for the TUI.
+The implemented configuration, planning, one-shot execution, protection-state,
+and activity-journal slices use `clap`, `serde`, `toml`, `humantime`, `regex`,
+`globset`, and `fs2`. The Docker adapter uses `bollard` and `tokio` without
+shelling out. Planned runtime layers will use `ratatui` with `crossterm` for the
+TUI.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor, which rechecks the current
@@ -240,7 +275,8 @@ delete request.
 
 - **M0 — Walking skeleton (in progress):** configuration, Docker inventory,
   dry-run plans, and conservative one-shot cleanup for all five resource types.
-- **M1 — Core engine:** durable protection, daemon mode, and activity history.
+- **M1 — Core engine (in progress):** durable protection and activity history
+  work from source; daemon mode remains.
 - **M2 — v0.1 interfaces:** TUI, stable machine schemas, reports, and releases.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
 

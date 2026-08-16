@@ -1,8 +1,11 @@
-use clap::{error::ErrorKind, Parser, Subcommand};
+use clap::{error::ErrorKind, Parser, Subcommand, ValueEnum};
+use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
 use docker_maid::config::{load_config, DEFAULT_CONFIG};
-use docker_maid::executor::execute_plan;
+use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::collect_inventory;
-use docker_maid::plan::{build_plan, Action, Disposition};
+use docker_maid::plan::{build_plan_with_protection, Action, Disposition, Plan};
+use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -12,6 +15,7 @@ const EXIT_PENDING: u8 = 1;
 const EXIT_PARTIAL: u8 = 2;
 const EXIT_CONFIG: u8 = 3;
 const EXIT_DOCKER: u8 = 5;
+const EXIT_STATE: u8 = 6;
 const EXIT_INTERNAL: u8 = 7;
 const EXIT_USAGE: u8 = 64;
 
@@ -36,6 +40,22 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
+    /// Show current inventory disposition and the last completed cleanup pass.
+    Status,
+    /// Add one or more typed runtime protection entries.
+    Protect {
+        #[arg(value_enum)]
+        kind: CliProtectionKind,
+        #[arg(required = true)]
+        values: Vec<String>,
+    },
+    /// Remove one or more typed runtime protection entries.
+    Unprotect {
+        #[arg(value_enum)]
+        kind: CliProtectionKind,
+        #[arg(required = true)]
+        values: Vec<String>,
+    },
     /// Generate, validate, or normalize configuration.
     Config {
         #[command(subcommand)]
@@ -51,6 +71,25 @@ enum ConfigCommand {
     Print,
     /// Print an annotated default configuration.
     Default,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliProtectionKind {
+    Container,
+    Volume,
+    Image,
+    Network,
+}
+
+impl From<CliProtectionKind> for ProtectionKind {
+    fn from(kind: CliProtectionKind) -> Self {
+        match kind {
+            CliProtectionKind::Container => Self::Container,
+            CliProtectionKind::Volume => Self::Volume,
+            CliProtectionKind::Image => Self::Image,
+            CliProtectionKind::Network => Self::Network,
+        }
+    }
 }
 
 #[tokio::main]
@@ -87,8 +126,17 @@ async fn main() -> ExitCode {
             ExitCode::from(EXIT_DOCKER)
         }
         Err(RunError::Execution(error)) => {
+            let code = if matches!(error, docker_maid::executor::ExecutionError::State(_)) {
+                EXIT_STATE
+            } else {
+                EXIT_DOCKER
+            };
             write_diagnostic(&format!("error: {error}"));
-            ExitCode::from(EXIT_DOCKER)
+            ExitCode::from(code)
+        }
+        Err(RunError::State(error)) => {
+            write_diagnostic(&format!("error: {error}"));
+            ExitCode::from(EXIT_STATE)
         }
         Err(RunError::Internal(error)) => {
             write_diagnostic(&format!("error: {error}"));
@@ -109,6 +157,7 @@ enum RunError {
     Config(docker_maid::config::ConfigError),
     Docker(docker_maid::inventory::InventoryError),
     Execution(docker_maid::executor::ExecutionError),
+    State(String),
     Internal(String),
     Output(io::Error),
 }
@@ -137,10 +186,46 @@ impl From<docker_maid::executor::ExecutionError> for RunError {
     }
 }
 
+impl From<docker_maid::state::StateError> for RunError {
+    fn from(error: docker_maid::state::StateError) -> Self {
+        Self::State(error.to_string())
+    }
+}
+
+impl From<docker_maid::activity::ActivityError> for RunError {
+    fn from(error: docker_maid::activity::ActivityError) -> Self {
+        Self::State(error.to_string())
+    }
+}
+
 async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
     match cli.command {
         Command::Plan => run_cleanup(cli.config.as_deref(), false, false).await,
         Command::Clean { apply } => run_cleanup(cli.config.as_deref(), true, apply).await,
+        Command::Status => run_status(cli.config.as_deref()).await,
+        Command::Protect { kind, values } => {
+            let store = ProtectionStore::from_env()?;
+            let kind = ProtectionKind::from(kind);
+            let added = store.add(kind, &values)?;
+            let message = format!(
+                "Protection state updated: added {added}, total {}.\n",
+                store.snapshot()?.entries.len()
+            );
+            write_payload(message.as_bytes())?;
+            Ok(RunOutcome::Success)
+        }
+        Command::Unprotect { kind, values } => {
+            let kind = ProtectionKind::from(kind);
+            refuse_config_sourced_unprotect(cli.config.as_deref(), kind, &values)?;
+            let store = ProtectionStore::from_env()?;
+            let removed = store.remove(kind, &values)?;
+            let message = format!(
+                "Protection state updated: removed {removed}, total {}.\n",
+                store.snapshot()?.entries.len()
+            );
+            write_payload(message.as_bytes())?;
+            Ok(RunOutcome::Success)
+        }
         Command::Config {
             command: ConfigCommand::Default,
         } => {
@@ -177,9 +262,17 @@ async fn run_cleanup(
             "warning: build-cache policy is authorized-unscoped because Docker cache records have no ownership metadata",
         );
     }
+    let state_paths = StatePaths::from_env()?;
+    let protection_store = ProtectionStore::new(state_paths.clone());
+    let runtime_protection = protection_store.snapshot()?;
     let inventory = collect_inventory(&loaded.config).await?;
-    let plan = build_plan(&loaded.config, inventory, epoch_seconds()?)
-        .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
+    let plan = build_plan_with_protection(
+        &loaded.config,
+        inventory,
+        epoch_seconds()?,
+        &runtime_protection,
+    )
+    .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
 
     if !clean_command || !apply {
         let pending = plan.has_pending_removals();
@@ -189,11 +282,6 @@ async fn run_cleanup(
         } else {
             RunOutcome::Success
         });
-    }
-
-    if !plan.has_pending_removals() {
-        write_payload(plan.render_table().as_bytes())?;
-        return Ok(RunOutcome::Success);
     }
 
     let authorized_unscoped = plan
@@ -210,14 +298,174 @@ async fn run_cleanup(
         ));
     }
 
-    let report = execute_plan(&loaded.path, &loaded.config, &loaded.source, &plan).await?;
+    let journal = ActivityJournal::new(state_paths);
+    let started_at = epoch_seconds()?;
+    let activity = journal.start_pass("clean", &stable_config_hash(&loaded.source), started_at)?;
+    let report = if plan.has_pending_removals() {
+        execute_plan(
+            &loaded.path,
+            &loaded.config,
+            &loaded.source,
+            &plan,
+            &protection_store,
+        )
+        .await?
+    } else {
+        ExecutionReport {
+            outcomes: Vec::new(),
+        }
+    };
+    activity.finish(&plan, &report, epoch_seconds()?)?;
     let partial = report.has_partial_failure();
-    write_payload(report.render_table().as_bytes())?;
+    let output = if plan.has_pending_removals() {
+        report.render_table()
+    } else {
+        plan.render_table()
+    };
+    write_payload(output.as_bytes())?;
     Ok(if partial {
         RunOutcome::PartialFailure
     } else {
         RunOutcome::Success
     })
+}
+
+async fn run_status(explicit_config: Option<&Path>) -> Result<RunOutcome, RunError> {
+    let loaded = load_selected_config(explicit_config)?;
+    let paths = StatePaths::from_env()?;
+    let protection = ProtectionStore::new(paths.clone()).snapshot()?;
+    let inventory = collect_inventory(&loaded.config).await?;
+    let plan = build_plan_with_protection(&loaded.config, inventory, epoch_seconds()?, &protection)
+        .map_err(|error| RunError::Internal(format!("cannot build status: {error}")))?;
+    let last_pass = ActivityJournal::new(paths).last_completed_pass()?;
+    let output = render_status(&plan, protection.entries.len(), last_pass.as_ref());
+    write_payload(output.as_bytes())?;
+    Ok(RunOutcome::Success)
+}
+
+fn render_status(
+    plan: &Plan,
+    runtime_protection_count: usize,
+    last: Option<&CompletedPass>,
+) -> String {
+    let protected = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.disposition == Disposition::Protected)
+        .count();
+    let owned = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.disposition == Disposition::Owned)
+        .count();
+    let authorized = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.disposition == Disposition::AuthorizedUnscoped)
+        .count();
+    let unowned = plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.disposition == Disposition::Unowned)
+        .count();
+    let mut output = format!(
+        "Inventory: total={}, protected={}, owned={}, authorized-unscoped={}, unowned={}, pending={}\nRuntime protection entries: {runtime_protection_count}\n",
+        plan.decisions.len(),
+        protected,
+        owned,
+        authorized,
+        unowned,
+        plan.pending_count()
+    );
+    let Some(last) = last else {
+        output.push_str("Last completed cleanup pass: none\n");
+        return output;
+    };
+    writeln!(
+        output,
+        "Last completed cleanup pass: {} ({} to {}, source={}, config={})",
+        last.pass_id, last.started_at, last.completed_at, last.source, last.config_hash
+    )
+    .expect("writing status to a String cannot fail");
+    for event in &last.actions {
+        if let EventData::Action {
+            action,
+            resource_kind,
+            resource_name,
+            matched_rule,
+            freed_bytes,
+            ..
+        } = &event.data
+        {
+            writeln!(
+                output,
+                "  {action} {resource_kind} {resource_name} rule={matched_rule} freed_bytes={freed_bytes}"
+            )
+            .expect("writing status to a String cannot fail");
+        }
+    }
+    writeln!(
+        output,
+        "Last result: removed={}, skipped={}, failed={}, reclaimed_bytes={}",
+        last.removed_count, last.skipped_count, last.failure_count, last.reclaimed_bytes
+    )
+    .expect("writing status to a String cannot fail");
+    output
+}
+
+fn refuse_config_sourced_unprotect(
+    explicit_config: Option<&Path>,
+    kind: ProtectionKind,
+    values: &[String],
+) -> Result<(), RunError> {
+    let loaded = match load_selected_config(explicit_config) {
+        Ok(loaded) => Some(loaded),
+        Err(RunError::Config(docker_maid::config::ConfigError::NotFound { .. }))
+            if explicit_config.is_none() =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(loaded) = loaded else {
+        return Ok(());
+    };
+    for value in values {
+        for (index, pattern) in loaded.config.protect.names.iter().enumerate() {
+            let matches = regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(value));
+            if matches {
+                let line = protect_names_line(&loaded.source)
+                    .map_or_else(String::new, |line| format!(":{line}"));
+                return Err(RunError::State(format!(
+                    "cannot unprotect {kind} {value:?}: it is protected by {}{line} (protect.names[{index}]); edit that configuration entry",
+                    loaded.path.display(),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn protect_names_line(source: &str) -> Option<usize> {
+    let mut in_protect = false;
+    for (index, line) in source.lines().enumerate() {
+        let line = line.trim();
+        if line == "[protect]" {
+            in_protect = true;
+            continue;
+        }
+        if in_protect && line.starts_with('[') {
+            return None;
+        }
+        if in_protect
+            && line
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "names")
+        {
+            return Some(index + 1);
+        }
+    }
+    None
 }
 
 fn epoch_seconds() -> Result<i64, RunError> {
