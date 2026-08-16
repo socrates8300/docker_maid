@@ -69,16 +69,22 @@ const RETIRED_KEYS: &[(&str, &str)] = &[(
 
 /// Return the retired key a parse failure names, with its migration note.
 ///
-/// The match is on the exact "unknown field" phrase serde emits for that key,
-/// so a near-miss typo such as `adpot` keeps the plain unknown-field message
-/// instead of borrowing guidance meant for a real retirement. The key is
-/// matched wherever it appears, and the note says which table it came from,
-/// so the guidance stays true even for a file that put it under the wrong one.
+/// A rendered TOML error quotes the operator's own source line above its
+/// message, so a plain substring search would fire on a file that merely
+/// contains the phrase inside a string value. Only a line that *starts* with
+/// the phrase is serde's own message: every quoted source line carries a
+/// `N | ` gutter. A near-miss typo such as `adpot` therefore keeps the plain
+/// unknown-field message instead of borrowing guidance meant for a real
+/// retirement. The key is matched under any table, and the note says which
+/// table it came from, so the guidance stays true for a file that misplaced it.
 fn retired_key_hint(source: &toml::de::Error) -> Option<(&'static str, &'static str)> {
-    let message = source.to_string();
+    let rendered = source.to_string();
     RETIRED_KEYS
         .iter()
-        .find(|(key, _)| message.contains(&format!("unknown field `{key}`")))
+        .find(|(key, _)| {
+            let message = format!("unknown field `{key}`");
+            rendered.lines().any(|line| line.starts_with(&message))
+        })
         .copied()
 }
 
@@ -705,6 +711,19 @@ mod tests {
         assert!(message.contains("retired key `adopt`:"));
         assert!(message.contains("a rule match already means the resource is owned"));
         assert!(message.contains("Delete the line"));
+    }
+
+    #[test]
+    fn a_quoted_source_line_never_triggers_the_retirement_note() {
+        // The failure here is `bogus`. A rendered TOML error quotes the
+        // operator's own line above its message, so a naive substring search
+        // over the whole error would blame a retired key for someone else's
+        // typo and hand out a migration that does not apply.
+        let source = "[defaults]\nbogus = \"unknown field `adopt`\"\n";
+        let error = Config::parse(source, Path::new("quoted.toml")).expect_err("must reject bogus");
+        let message = error.to_string();
+        assert!(message.contains("unknown field `bogus`"));
+        assert!(!message.contains("retired key"));
     }
 
     #[test]

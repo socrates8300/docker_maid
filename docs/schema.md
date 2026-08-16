@@ -10,6 +10,15 @@ Use `--format json` or its `--json` alias on any non-interactive command. One-sh
 
 Schema version 1 is additive-only. Existing fields keep their meaning and type. New optional fields can be added without changing `schema_version`.
 
+One field has been removed under this version, and it is listed here rather
+than hidden behind a version bump. Container rules in the `configuration`
+object no longer carry `adopt`. It was always `false`, no code read it, and no
+decision consulted it, so no consumer could have branched on its value. Bumping
+`schema_version` would have forced every consumer to re-verify the whole
+interface to learn that a constant went away. Any further removal takes a
+version bump; this is not a precedent for dropping a field a consumer can act
+on.
+
 JSON mode does not emit ANSI escapes, progress bars, or prompts. A fatal error leaves stdout empty and writes one error document to stderr. Warnings are one JSON document per stderr line.
 
 ## Global error and warning documents
