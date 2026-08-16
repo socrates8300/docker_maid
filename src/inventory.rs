@@ -1,5 +1,6 @@
 //! Read-only Docker inventory adapter.
 
+use crate::config::Config;
 use crate::plan::{InventoryItem, ResourceKind, ResourceState};
 use bollard::errors::Error as BollardError;
 use bollard::models::{ContainerInspectResponse, ContainerSummary, ImageSummary, Network, Volume};
@@ -74,6 +75,16 @@ pub async fn collect_inventory(
         (left.kind, &left.name, &left.id).cmp(&(right.kind, &right.name, &right.id))
     });
     Ok(inventory)
+}
+
+/// Return whether container inspection is required for configured state-age rules.
+#[must_use]
+pub fn needs_container_state(config: &Config) -> bool {
+    config
+        .rules
+        .containers
+        .iter()
+        .any(|rule| rule.stopped_ttl.is_some() || rule.running_ttl.is_some())
 }
 
 async fn read_docker_lists(

@@ -1,13 +1,15 @@
 use clap::{error::ErrorKind, Parser, Subcommand};
 use docker_maid::config::{load_config, DEFAULT_CONFIG};
-use docker_maid::inventory::collect_inventory;
-use docker_maid::plan::build_plan;
+use docker_maid::executor::execute_plan;
+use docker_maid::inventory::{collect_inventory, needs_container_state};
+use docker_maid::plan::{build_plan, Action, Disposition};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const EXIT_PENDING: u8 = 1;
+const EXIT_PARTIAL: u8 = 2;
 const EXIT_CONFIG: u8 = 3;
 const EXIT_DOCKER: u8 = 5;
 const EXIT_INTERNAL: u8 = 7;
@@ -28,6 +30,12 @@ struct Cli {
 enum Command {
     /// Print the policy-derived dry-run plan without changing Docker.
     Plan,
+    /// Run one policy-derived cleanup pass; mutation requires --apply.
+    Clean {
+        /// Apply the generated plan without prompting.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Generate, validate, or normalize configuration.
     Config {
         #[command(subcommand)]
@@ -62,6 +70,7 @@ async fn main() -> ExitCode {
     match run(cli).await {
         Ok(RunOutcome::Success) => ExitCode::SUCCESS,
         Ok(RunOutcome::PendingRemovals) => ExitCode::from(EXIT_PENDING),
+        Ok(RunOutcome::PartialFailure) => ExitCode::from(EXIT_PARTIAL),
         Err(RunError::Output(error)) => {
             let code = output_error_exit_code(&error);
             if code != 0 {
@@ -77,6 +86,10 @@ async fn main() -> ExitCode {
             write_diagnostic(&format!("error: {error}"));
             ExitCode::from(EXIT_DOCKER)
         }
+        Err(RunError::Execution(error)) => {
+            write_diagnostic(&format!("error: {error}"));
+            ExitCode::from(EXIT_DOCKER)
+        }
         Err(RunError::Internal(error)) => {
             write_diagnostic(&format!("error: {error}"));
             ExitCode::from(EXIT_INTERNAL)
@@ -88,12 +101,14 @@ async fn main() -> ExitCode {
 enum RunOutcome {
     Success,
     PendingRemovals,
+    PartialFailure,
 }
 
 #[derive(Debug)]
 enum RunError {
     Config(docker_maid::config::ConfigError),
     Docker(docker_maid::inventory::InventoryError),
+    Execution(docker_maid::executor::ExecutionError),
     Internal(String),
     Output(io::Error),
 }
@@ -116,42 +131,16 @@ impl From<docker_maid::inventory::InventoryError> for RunError {
     }
 }
 
+impl From<docker_maid::executor::ExecutionError> for RunError {
+    fn from(error: docker_maid::executor::ExecutionError) -> Self {
+        Self::Execution(error)
+    }
+}
+
 async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
     match cli.command {
-        Command::Plan => {
-            let loaded = load_selected_config(cli.config.as_deref())?;
-            if loaded.config.rules.build_cache.is_some() {
-                write_diagnostic(
-                    "warning: rules.build_cache was not evaluated because build-cache inventory is not implemented",
-                );
-            }
-            let inspect_container_state = loaded
-                .config
-                .rules
-                .containers
-                .iter()
-                .any(|rule| rule.stopped_ttl.is_some() || rule.running_ttl.is_some());
-            let inventory = collect_inventory(inspect_container_state).await?;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| {
-                    RunError::Internal(format!("system clock is before 1970: {error}"))
-                })?
-                .as_secs()
-                .try_into()
-                .map_err(|error| {
-                    RunError::Internal(format!("system clock is out of range: {error}"))
-                })?;
-            let plan = build_plan(&loaded.config, inventory, now)
-                .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
-            let pending = plan.has_pending_removals();
-            write_payload(plan.render_table().as_bytes())?;
-            Ok(if pending {
-                RunOutcome::PendingRemovals
-            } else {
-                RunOutcome::Success
-            })
-        }
+        Command::Plan => run_cleanup(cli.config.as_deref(), false, false).await,
+        Command::Clean { apply } => run_cleanup(cli.config.as_deref(), true, apply).await,
         Command::Config {
             command: ConfigCommand::Default,
         } => {
@@ -175,6 +164,69 @@ async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
             Ok(RunOutcome::Success)
         }
     }
+}
+
+async fn run_cleanup(
+    explicit_config: Option<&Path>,
+    clean_command: bool,
+    apply: bool,
+) -> Result<RunOutcome, RunError> {
+    let loaded = load_selected_config(explicit_config)?;
+    if loaded.config.rules.build_cache.is_some() {
+        write_diagnostic(
+            "warning: rules.build_cache was not evaluated because build-cache inventory is not implemented",
+        );
+    }
+    let inventory = collect_inventory(needs_container_state(&loaded.config)).await?;
+    let plan = build_plan(&loaded.config, inventory, epoch_seconds()?)
+        .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
+
+    if !clean_command || !apply {
+        let pending = plan.has_pending_removals();
+        write_payload(plan.render_table().as_bytes())?;
+        return Ok(if pending {
+            RunOutcome::PendingRemovals
+        } else {
+            RunOutcome::Success
+        });
+    }
+
+    if !plan.has_pending_removals() {
+        write_payload(plan.render_table().as_bytes())?;
+        return Ok(RunOutcome::Success);
+    }
+
+    let authorized_unscoped = plan
+        .decisions
+        .iter()
+        .filter(|decision| {
+            decision.action == Action::Remove
+                && decision.disposition == Disposition::AuthorizedUnscoped
+        })
+        .count();
+    if authorized_unscoped != 0 {
+        write_diagnostic(&format!(
+            "warning: applying {authorized_unscoped} authorized-unscoped removal(s)"
+        ));
+    }
+
+    let report = execute_plan(&loaded.path, &loaded.config, &loaded.source, &plan).await?;
+    let partial = report.has_partial_failure();
+    write_payload(report.render_table().as_bytes())?;
+    Ok(if partial {
+        RunOutcome::PartialFailure
+    } else {
+        RunOutcome::Success
+    })
+}
+
+fn epoch_seconds() -> Result<i64, RunError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| RunError::Internal(format!("system clock is before 1970: {error}")))?
+        .as_secs()
+        .try_into()
+        .map_err(|error| RunError::Internal(format!("system clock is out of range: {error}")))
 }
 
 fn load_selected_config(
@@ -242,5 +294,15 @@ mod tests {
     fn other_output_error_is_internal_failure() {
         let error = io::Error::from(io::ErrorKind::StorageFull);
         assert_eq!(output_error_exit_code(&error), EXIT_INTERNAL);
+    }
+
+    #[test]
+    fn clean_is_dry_run_unless_apply_is_explicit() {
+        let dry_run = Cli::try_parse_from(["docker_maid", "clean"]).expect("parse clean");
+        assert!(matches!(dry_run.command, Command::Clean { apply: false }));
+
+        let applied =
+            Cli::try_parse_from(["docker_maid", "clean", "--apply"]).expect("parse apply");
+        assert!(matches!(applied.command, Command::Clean { apply: true }));
     }
 }

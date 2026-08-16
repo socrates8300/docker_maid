@@ -19,13 +19,11 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
-fn run_plan(root: &Path, config: &Path) -> Output {
+fn run_command(root: &Path, config: &Path, command: &[&str]) -> Output {
+    let mut args = vec!["--config", config.to_str().expect("UTF-8 config path")];
+    args.extend_from_slice(command);
     Command::new(binary())
-        .args([
-            "--config",
-            config.to_str().expect("UTF-8 config path"),
-            "plan",
-        ])
+        .args(args)
         .current_dir(root)
         .env("DOCKER_HOST", "tcp://127.0.0.1:1")
         .output()
@@ -42,10 +40,15 @@ fn unreachable_docker_exits_five_without_payload() {
     )
     .expect("write config");
 
-    let output = run_plan(&root, &config);
-    assert_eq!(output.status.code(), Some(5));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Docker"));
+    for command in [&["plan"][..], &["clean"][..], &["clean", "--apply"][..]] {
+        let output = run_command(&root, &config, command);
+        assert_eq!(output.status.code(), Some(5), "command: {command:?}");
+        assert!(output.stdout.is_empty(), "command: {command:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Docker"),
+            "command: {command:?}"
+        );
+    }
 
     fs::remove_dir_all(root).expect("remove test directory");
 }
@@ -60,10 +63,32 @@ fn invalid_selector_exits_three_before_docker_inventory() {
     )
     .expect("write config");
 
-    let output = run_plan(&root, &config);
-    assert_eq!(output.status.code(), Some(3));
+    for command in [&["plan"][..], &["clean", "--apply"][..]] {
+        let output = run_command(&root, &config, command);
+        assert_eq!(output.status.code(), Some(3), "command: {command:?}");
+        assert!(output.stdout.is_empty(), "command: {command:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("select.names[0]"),
+            "command: {command:?}"
+        );
+    }
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn clean_rejects_the_removed_yes_flag() {
+    let root = temp_dir("no-yes");
+    let config = root.join("config.toml");
+    fs::write(
+        &config,
+        "[[rules.networks]]\nname='agents'\nselect.names=['^agent-']\norphan=true\n",
+    )
+    .expect("write config");
+
+    let output = run_command(&root, &config, &["clean", "--apply", "--yes"]);
+    assert_eq!(output.status.code(), Some(64));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("select.names[0]"));
 
     fs::remove_dir_all(root).expect("remove test directory");
 }

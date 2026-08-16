@@ -3,10 +3,11 @@
 > Declare what agent sprawl looks like; docker_maid keeps it at zero.
 
 > [!IMPORTANT]
-> **Project status: early implementation.** Strict configuration and the
-> read-only `plan` command work from source. Docker mutation, build-cache
-> inventory, daemon mode, JSON mode, and the TUI are not implemented or
-> released yet. Commands in planned sections do not work.
+> **Project status: early implementation.** Strict configuration, read-only
+> planning, and one-shot cleanup for containers, images, volumes, and networks
+> work from source. Build-cache inventory, durable protection state, activity
+> history, daemon mode, JSON mode, and the TUI are not implemented or released
+> yet. Commands in planned sections do not work.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
 behind by coding-agent workflows. It targets one Docker host at a time and puts
@@ -27,10 +28,11 @@ ownership rules or an intentionally enabled unscoped policy.
 
 ## Safety model
 
-The planned deletion contract is the same in every interface:
+The deletion contract is the same in every interface:
 
 - Non-interactive commands are dry-run unless `--apply` is present.
-- The TUI can apply only a policy-generated, immutable plan after confirmation.
+- The planned TUI can apply only a policy-generated, immutable plan after
+  confirmation.
 - Protected resources always win over cleanup rules.
 - Every target must still match its rule immediately before deletion.
 - Delete-time revalidation can remove targets from a plan, but never add them.
@@ -98,17 +100,40 @@ Build-cache records are not included in this implementation slice. A configured
 `rules.build_cache` section still validates, but `plan` does not inventory or
 report build cache yet.
 
-## Planned cleanup execution
+## Available now: one-shot cleanup
 
-The commands in this section describe the planned mutation interface. They do
-not work yet.
+`clean` without `--apply` is the same dry-run boundary as `plan`. `--apply` is
+the complete non-interactive authorization and never opens a prompt.
 
 ```sh
-# The implemented plan command is the dry-run boundary.
-docker_maid plan
+# Dry run. Exit 1 means removals are pending.
+cargo run -- clean
 
 # Run one authorized cleanup pass without prompts.
-docker_maid clean --apply
+cargo run -- clean --apply
+```
+
+The target IDs come only from the initial policy plan. Before every delete,
+the executor reloads the exact configuration file, rejects a changed config,
+re-inventories Docker, and requires the same ID, rule, disposition, and removal
+decision. A target that disappears, becomes protected, gains a reference, or
+otherwise becomes ineligible is skipped. The pass continues and exits `2`
+after any skip or deletion failure; successful deletions remain reported.
+
+Container deletion does not remove anonymous volumes. Image deletion disables
+parent-image pruning. Image and volume deletion are not forced, and Docker's
+reference checks provide the last barrier against state changes after
+revalidation.
+
+Only configuration-sourced protection exists in this implementation slice.
+The typed, locked protection state file and activity journal described by the
+PRD remain planned. Build-cache cleanup is also excluded.
+
+## Planned daemon execution
+
+The command in this section does not work yet.
+
+```sh
 
 # Run continuous authorized cleanup.
 docker_maid daemon --apply
@@ -184,9 +209,9 @@ exit codes are:
 
 ## Architecture
 
-The implemented configuration and planning slices use `clap`, `serde`, `toml`,
-`humantime`, `regex`, and `globset`. The read-only adapter uses `bollard` and
-`tokio` to query Docker without shelling out. Planned runtime layers will use
+The implemented configuration, planning, and one-shot execution slices use
+`clap`, `serde`, `toml`, `humantime`, `regex`, and `globset`. The Docker adapter
+uses `bollard` and `tokio` without shelling out. Planned runtime layers will use
 `ratatui` with `crossterm` for the TUI.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
@@ -196,8 +221,10 @@ delete request.
 
 ## Roadmap
 
-- **M0 — Walking skeleton (in progress):** configuration, Docker inventory, and dry-run plans.
-- **M1 — Core engine:** cleanup rules, protection, daemon mode, and activity history.
+- **M0 — Walking skeleton (in progress):** configuration, Docker inventory,
+  dry-run plans, and conservative one-shot cleanup for four resource types.
+- **M1 — Core engine:** build cache, durable protection, daemon mode, and
+  activity history.
 - **M2 — v0.1 interfaces:** TUI, stable machine schemas, reports, and releases.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
 

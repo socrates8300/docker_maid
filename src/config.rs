@@ -430,6 +430,7 @@ impl Tui {
 pub struct LoadedConfig {
     pub path: PathBuf,
     pub config: Config,
+    pub source: String,
 }
 
 /// Resolve, read, parse, and validate a configuration file.
@@ -450,7 +451,11 @@ pub fn load_config(
     })?;
     let config = Config::parse(&source, &path)?;
     config.validate()?;
-    Ok(LoadedConfig { path, config })
+    Ok(LoadedConfig {
+        path,
+        config,
+        source,
+    })
 }
 
 /// Select a configuration path using explicit, local, then XDG precedence.
