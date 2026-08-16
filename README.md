@@ -6,7 +6,7 @@
 > **Project status: early implementation.** Strict configuration, read-only
 > planning, and one-shot cleanup for containers, images, volumes, networks, and
 > build cache work from source. Typed runtime protection and durable cleanup
-> activity history also work from source. Daemon mode, JSON mode, and the TUI
+> activity history and daemon mode also work from source. JSON mode and the TUI
 > are not implemented or released yet. Commands in planned sections do not work.
 
 docker_maid is an early-stage Rust CLI that will reclaim Docker resources left
@@ -160,10 +160,11 @@ points to the configuration field that must be edited. Before each delete, the
 executor reloads runtime state under a shared inter-process lock and holds that
 lock through the Docker request.
 
-Every `clean --apply` pass appends schema-versioned, correlated events to
-`activity.jsonl`. Complete records are serialized across processes. History is
-bounded to 10,000 events and 5 MiB. `status` reports current disposition counts
-and the most recent completed pass after a process restart:
+Every `clean --apply` or `daemon --apply` pass appends schema-versioned,
+correlated events to `activity.jsonl`. Complete records are serialized across
+processes. History is bounded to 10,000 events and 5 MiB. `status` reports
+current disposition counts and the most recent completed pass after a process
+restart:
 
 ```sh
 docker_maid status
@@ -171,15 +172,28 @@ docker_maid status
 
 Protection or activity state failures stop the command with exit code `6`.
 
-## Planned daemon execution
+## Available now: daemon execution
 
-The command in this section does not work yet.
+`daemon` runs a pass immediately, then waits for the configured interval. It is
+a read-only monitor unless `--apply` is explicit. Every pass reloads the full
+configuration and protection state. Docker, configuration, or state failures
+are reported and retried at the next interval without busy-looping.
 
 ```sh
+# Monitor every five minutes without mutation.
+docker_maid daemon
 
 # Run continuous authorized cleanup.
 docker_maid daemon --apply
+
+# Override `[defaults].interval` for this process.
+docker_maid daemon --apply --interval 30s
 ```
+
+On macOS and Linux, `SIGHUP` starts an immediate pass with the latest
+configuration. `SIGTERM` and `SIGINT` wait for the current pass to finish, then
+exit successfully. Applied daemon passes use `source = "daemon"` in the durable
+activity journal. Versioned NDJSON daemon output remains planned.
 
 ### Planned TUI flow in 60 seconds
 
@@ -228,8 +242,8 @@ The rule emits a warning for every planned and applied pass.
 
 ## Agents and CI
 
-The current table-form `status` command is available now. Versioned JSON and
-daemon streams remain planned for agent workflows:
+The current table-form `status` and `daemon` commands are available now.
+Versioned JSON and NDJSON streams remain planned for agent workflows:
 
 ```sh
 # Inspect config, inventory, dispositions, history, and disk usage.
@@ -260,11 +274,11 @@ exit codes are:
 
 ## Architecture
 
-The implemented configuration, planning, one-shot execution, protection-state,
-and activity-journal slices use `clap`, `serde`, `toml`, `humantime`, `regex`,
-`globset`, and `fs2`. The Docker adapter uses `bollard` and `tokio` without
-shelling out. Planned runtime layers will use `ratatui` with `crossterm` for the
-TUI.
+The implemented configuration, planning, one-shot execution, daemon,
+protection-state, and activity-journal slices use `clap`, `serde`, `toml`,
+`humantime`, `regex`, `globset`, and `fs2`. The Docker adapter uses `bollard`
+and `tokio` without shelling out. Planned runtime layers will use `ratatui` with
+`crossterm` for the TUI.
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor, which rechecks the current
@@ -275,8 +289,8 @@ delete request.
 
 - **M0 — Walking skeleton (in progress):** configuration, Docker inventory,
   dry-run plans, and conservative one-shot cleanup for all five resource types.
-- **M1 — Core engine (in progress):** durable protection and activity history
-  work from source; daemon mode remains.
+- **M1 — Core engine (implemented from source):** durable protection, activity
+  history, and interval-driven daemon execution.
 - **M2 — v0.1 interfaces:** TUI, stable machine schemas, reports, and releases.
 - **M3 — Later:** disk budgets, sandbox spawning, daemon attachment, and MCP.
 

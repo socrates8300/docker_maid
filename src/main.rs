@@ -1,6 +1,6 @@
 use clap::{error::ErrorKind, Parser, Subcommand, ValueEnum};
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
-use docker_maid::config::{load_config, DEFAULT_CONFIG};
+use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
 use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::collect_inventory;
 use docker_maid::plan::{build_plan_with_protection, Action, Disposition, Plan};
@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const EXIT_PENDING: u8 = 1;
 const EXIT_PARTIAL: u8 = 2;
@@ -18,6 +18,7 @@ const EXIT_DOCKER: u8 = 5;
 const EXIT_STATE: u8 = 6;
 const EXIT_INTERNAL: u8 = 7;
 const EXIT_USAGE: u8 = 64;
+const DEFAULT_DAEMON_INTERVAL: &str = "5m";
 
 #[derive(Debug, Parser)]
 #[command(name = "docker_maid", version, about)]
@@ -39,6 +40,15 @@ enum Command {
         /// Apply the generated plan without prompting.
         #[arg(long)]
         apply: bool,
+    },
+    /// Continuously run policy-derived cleanup passes on an interval.
+    Daemon {
+        /// Apply each generated plan without prompting.
+        #[arg(long)]
+        apply: bool,
+        /// Override the configured pass interval (for example, 30s or 5m).
+        #[arg(long, value_name = "DURATION")]
+        interval: Option<String>,
     },
     /// Show current inventory disposition and the last completed cleanup pass.
     Status,
@@ -138,6 +148,10 @@ async fn main() -> ExitCode {
             write_diagnostic(&format!("error: {error}"));
             ExitCode::from(EXIT_STATE)
         }
+        Err(RunError::Usage(error)) => {
+            write_diagnostic(&format!("error: {error}"));
+            ExitCode::from(EXIT_USAGE)
+        }
         Err(RunError::Internal(error)) => {
             write_diagnostic(&format!("error: {error}"));
             ExitCode::from(EXIT_INTERNAL)
@@ -158,6 +172,7 @@ enum RunError {
     Docker(docker_maid::inventory::InventoryError),
     Execution(docker_maid::executor::ExecutionError),
     State(String),
+    Usage(String),
     Internal(String),
     Output(io::Error),
 }
@@ -202,6 +217,9 @@ async fn run(cli: Cli) -> Result<RunOutcome, RunError> {
     match cli.command {
         Command::Plan => run_cleanup(cli.config.as_deref(), false, false).await,
         Command::Clean { apply } => run_cleanup(cli.config.as_deref(), true, apply).await,
+        Command::Daemon { apply, interval } => {
+            run_daemon(cli.config.as_deref(), apply, interval.as_deref()).await
+        }
         Command::Status => run_status(cli.config.as_deref()).await,
         Command::Protect { kind, values } => {
             let store = ProtectionStore::from_env()?;
@@ -256,6 +274,29 @@ async fn run_cleanup(
     clean_command: bool,
     apply: bool,
 ) -> Result<RunOutcome, RunError> {
+    let prepared = prepare_cleanup(explicit_config).await?;
+    let result = if clean_command && apply {
+        apply_cleanup(&prepared, "clean").await?
+    } else {
+        dry_run_cleanup(&prepared)
+    };
+    write_payload(result.output.as_bytes())?;
+    Ok(result.outcome)
+}
+
+struct PreparedCleanup {
+    loaded: LoadedConfig,
+    state_paths: StatePaths,
+    protection_store: ProtectionStore,
+    plan: Plan,
+}
+
+struct CleanupPassResult {
+    output: String,
+    outcome: RunOutcome,
+}
+
+async fn prepare_cleanup(explicit_config: Option<&Path>) -> Result<PreparedCleanup, RunError> {
     let loaded = load_selected_config(explicit_config)?;
     if loaded.config.rules.build_cache.is_some() {
         write_diagnostic(
@@ -274,17 +315,31 @@ async fn run_cleanup(
     )
     .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
 
-    if !clean_command || !apply {
-        let pending = plan.has_pending_removals();
-        write_payload(plan.render_table().as_bytes())?;
-        return Ok(if pending {
+    Ok(PreparedCleanup {
+        loaded,
+        state_paths,
+        protection_store,
+        plan,
+    })
+}
+
+fn dry_run_cleanup(prepared: &PreparedCleanup) -> CleanupPassResult {
+    CleanupPassResult {
+        output: prepared.plan.render_table(),
+        outcome: if prepared.plan.has_pending_removals() {
             RunOutcome::PendingRemovals
         } else {
             RunOutcome::Success
-        });
+        },
     }
+}
 
-    let authorized_unscoped = plan
+async fn apply_cleanup(
+    prepared: &PreparedCleanup,
+    source: &str,
+) -> Result<CleanupPassResult, RunError> {
+    let authorized_unscoped = prepared
+        .plan
         .decisions
         .iter()
         .filter(|decision| {
@@ -298,16 +353,20 @@ async fn run_cleanup(
         ));
     }
 
-    let journal = ActivityJournal::new(state_paths);
+    let journal = ActivityJournal::new(prepared.state_paths.clone());
     let started_at = epoch_seconds()?;
-    let activity = journal.start_pass("clean", &stable_config_hash(&loaded.source), started_at)?;
-    let report = if plan.has_pending_removals() {
+    let activity = journal.start_pass(
+        source,
+        &stable_config_hash(&prepared.loaded.source),
+        started_at,
+    )?;
+    let report = if prepared.plan.has_pending_removals() {
         execute_plan(
-            &loaded.path,
-            &loaded.config,
-            &loaded.source,
-            &plan,
-            &protection_store,
+            &prepared.loaded.path,
+            &prepared.loaded.config,
+            &prepared.loaded.source,
+            &prepared.plan,
+            &prepared.protection_store,
         )
         .await?
     } else {
@@ -315,19 +374,194 @@ async fn run_cleanup(
             outcomes: Vec::new(),
         }
     };
-    activity.finish(&plan, &report, epoch_seconds()?)?;
+    activity.finish(&prepared.plan, &report, epoch_seconds()?)?;
     let partial = report.has_partial_failure();
-    let output = if plan.has_pending_removals() {
+    let output = if prepared.plan.has_pending_removals() {
         report.render_table()
     } else {
-        plan.render_table()
+        prepared.plan.render_table()
     };
-    write_payload(output.as_bytes())?;
-    Ok(if partial {
-        RunOutcome::PartialFailure
-    } else {
-        RunOutcome::Success
+    Ok(CleanupPassResult {
+        output,
+        outcome: if partial {
+            RunOutcome::PartialFailure
+        } else {
+            RunOutcome::Success
+        },
     })
+}
+
+async fn run_daemon(
+    explicit_config: Option<&Path>,
+    apply: bool,
+    interval_override: Option<&str>,
+) -> Result<RunOutcome, RunError> {
+    let override_interval = interval_override
+        .map(|source| daemon_interval(&Config::default(), Some(source)))
+        .transpose()?;
+    let initial = load_selected_config(explicit_config)?;
+    let mut interval = match override_interval {
+        Some(interval) => interval,
+        None => daemon_interval(&initial.config, None)?,
+    };
+    let mut signals = DaemonSignals::new()?;
+    let mode = if apply { "apply" } else { "dry-run" };
+    write_diagnostic(&format!(
+        "daemon: started in {mode} mode; interval {}",
+        humantime::format_duration(interval)
+    ));
+    let mut trigger = "startup";
+    let mut pass_number = 0u64;
+
+    loop {
+        pass_number = pass_number.saturating_add(1);
+        match run_daemon_pass(
+            explicit_config,
+            apply,
+            interval_override,
+            pass_number,
+            trigger,
+        )
+        .await
+        {
+            Ok(next_interval) => interval = next_interval,
+            Err(error @ RunError::Output(_)) => return Err(error),
+            Err(error) => write_diagnostic(&format!(
+                "error: daemon pass {pass_number} failed: {}",
+                run_error_message(&error)
+            )),
+        }
+
+        match signals.wait(interval).await {
+            DaemonWake::Interval => trigger = "interval",
+            DaemonWake::Reload => {
+                write_diagnostic("daemon: SIGHUP received; reloading configuration");
+                trigger = "SIGHUP";
+            }
+            DaemonWake::Terminate => {
+                write_diagnostic("daemon: shutdown requested; current pass complete");
+                return Ok(RunOutcome::Success);
+            }
+        }
+    }
+}
+
+async fn run_daemon_pass(
+    explicit_config: Option<&Path>,
+    apply: bool,
+    interval_override: Option<&str>,
+    pass_number: u64,
+    trigger: &str,
+) -> Result<Duration, RunError> {
+    let prepared = prepare_cleanup(explicit_config).await?;
+    let next_interval = daemon_interval(&prepared.loaded.config, interval_override)?;
+    let result = if apply {
+        apply_cleanup(&prepared, "daemon").await?
+    } else {
+        dry_run_cleanup(&prepared)
+    };
+    let mode = if apply { "apply" } else { "dry-run" };
+    let output = format!(
+        "Daemon pass {pass_number} ({trigger}, {mode})\n{}",
+        result.output
+    );
+    write_payload(output.as_bytes())?;
+    Ok(next_interval)
+}
+
+fn daemon_interval(config: &Config, interval_override: Option<&str>) -> Result<Duration, RunError> {
+    let (field, source) = interval_override.map_or_else(
+        || {
+            (
+                "defaults.interval",
+                config
+                    .defaults
+                    .interval
+                    .as_deref()
+                    .unwrap_or(DEFAULT_DAEMON_INTERVAL),
+            )
+        },
+        |source| ("--interval", source),
+    );
+    let duration = humantime::parse_duration(source).map_err(|error| {
+        RunError::Usage(format!("{field} must be a positive duration: {error}"))
+    })?;
+    if duration.is_zero() {
+        return Err(RunError::Usage(format!(
+            "{field} must be greater than zero"
+        )));
+    }
+    Ok(duration)
+}
+
+fn run_error_message(error: &RunError) -> String {
+    match error {
+        RunError::Config(error) => error.to_string(),
+        RunError::Docker(error) => error.to_string(),
+        RunError::Execution(error) => error.to_string(),
+        RunError::State(error) | RunError::Usage(error) | RunError::Internal(error) => {
+            error.clone()
+        }
+        RunError::Output(error) => format!("cannot write stdout: {error}"),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonWake {
+    Interval,
+    Reload,
+    Terminate,
+}
+
+#[cfg(unix)]
+struct DaemonSignals {
+    reload: tokio::signal::unix::Signal,
+    terminate: tokio::signal::unix::Signal,
+    interrupt: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl DaemonSignals {
+    fn new() -> Result<Self, RunError> {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        Ok(Self {
+            reload: signal(SignalKind::hangup()).map_err(|error| {
+                RunError::Internal(format!("cannot register SIGHUP handler: {error}"))
+            })?,
+            terminate: signal(SignalKind::terminate()).map_err(|error| {
+                RunError::Internal(format!("cannot register SIGTERM handler: {error}"))
+            })?,
+            interrupt: signal(SignalKind::interrupt()).map_err(|error| {
+                RunError::Internal(format!("cannot register SIGINT handler: {error}"))
+            })?,
+        })
+    }
+
+    async fn wait(&mut self, interval: Duration) -> DaemonWake {
+        tokio::select! {
+            _ = self.reload.recv() => DaemonWake::Reload,
+            _ = self.terminate.recv() => DaemonWake::Terminate,
+            _ = self.interrupt.recv() => DaemonWake::Terminate,
+            () = tokio::time::sleep(interval) => DaemonWake::Interval,
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct DaemonSignals;
+
+#[cfg(not(unix))]
+impl DaemonSignals {
+    fn new() -> Result<Self, RunError> {
+        Err(RunError::Internal(
+            "daemon signal handling currently requires a Unix platform".to_owned(),
+        ))
+    }
+
+    async fn wait(&mut self, _interval: Duration) -> DaemonWake {
+        unreachable!("daemon construction fails on non-Unix platforms")
+    }
 }
 
 async fn run_status(explicit_config: Option<&Path>) -> Result<RunOutcome, RunError> {
@@ -552,5 +786,45 @@ mod tests {
         let applied =
             Cli::try_parse_from(["docker_maid", "clean", "--apply"]).expect("parse apply");
         assert!(matches!(applied.command, Command::Clean { apply: true }));
+    }
+
+    #[test]
+    fn daemon_is_dry_run_unless_apply_is_explicit() {
+        let monitor = Cli::try_parse_from(["docker_maid", "daemon"]).expect("parse daemon");
+        assert!(matches!(
+            monitor.command,
+            Command::Daemon {
+                apply: false,
+                interval: None
+            }
+        ));
+
+        let applied =
+            Cli::try_parse_from(["docker_maid", "daemon", "--apply", "--interval", "30s"])
+                .expect("parse applied daemon");
+        assert!(matches!(
+            applied.command,
+            Command::Daemon {
+                apply: true,
+                interval: Some(ref value)
+            } if value == "30s"
+        ));
+    }
+
+    #[test]
+    fn daemon_interval_must_be_positive() {
+        let config = Config::default();
+        assert_eq!(
+            daemon_interval(&config, Some("250ms")).expect("duration"),
+            Duration::from_millis(250)
+        );
+        assert!(matches!(
+            daemon_interval(&config, Some("0s")),
+            Err(RunError::Usage(message)) if message.contains("greater than zero")
+        ));
+        assert!(matches!(
+            daemon_interval(&config, Some("later")),
+            Err(RunError::Usage(message)) if message.contains("positive duration")
+        ));
     }
 }
