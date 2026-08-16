@@ -17,8 +17,10 @@ use docker_maid::configurator::{
 };
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
 use docker_maid::inventory::collect_inventory_for_configuration;
+use docker_maid::observation::{ObservationState, ObservationStore};
 use docker_maid::plan::{
-    build_plan_with_protection, Action, Decision, Disposition, InventoryItem, Plan, ResourceKind,
+    build_plan_with_context, Action, Decision, Disposition, InventoryItem, Plan, PlanContext,
+    ResourceKind,
 };
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use futures_util::StreamExt;
@@ -153,6 +155,7 @@ struct App {
     activity_scroll: u16,
     rules_scroll: u16,
     survey: ConfiguratorSurvey,
+    observations: ObservationState,
     configure_selected: BTreeSet<String>,
     configure_row: usize,
     configure_profile: PolicyProfile,
@@ -163,6 +166,42 @@ struct App {
     status: String,
 }
 
+/// Collect the opening Docker snapshot, advancing the observed-unreferenced
+/// clock, and degrade to an empty snapshot when Docker is unreachable.
+async fn startup_snapshot(
+    loaded: &LoadedConfig,
+    state_paths: &StatePaths,
+    protection: &docker_maid::state::ProtectionState,
+    plan_created_at: i64,
+) -> Result<(Plan, ConfiguratorSurvey, ObservationState, Option<String>), RunError> {
+    let inventory = match collect_inventory_for_configuration().await {
+        Ok(inventory) => inventory,
+        Err(error) => {
+            return Ok((
+                Plan {
+                    decisions: Vec::new(),
+                },
+                survey_inventory(&[]),
+                ObservationState::default(),
+                Some(error.to_string()),
+            ))
+        }
+    };
+    let observations =
+        ObservationStore::new(state_paths.clone()).record(&inventory, plan_created_at)?;
+    let plan = build_plan_with_context(
+        &loaded.config,
+        inventory.clone(),
+        plan_created_at,
+        &PlanContext {
+            protection,
+            observations: &observations,
+        },
+    )
+    .map_err(|error| RunError::Internal(format!("cannot build TUI snapshot: {error}")))?;
+    Ok((plan, survey_inventory(&inventory), observations, None))
+}
+
 impl App {
     async fn load(explicit_config: Option<&Path>) -> Result<Self, RunError> {
         let (loaded, built_in_config) = load_tui_config(explicit_config)?;
@@ -171,28 +210,8 @@ impl App {
         let protection = protection_store.snapshot()?;
         let plan_created_at = epoch_seconds()?;
         let config_hash = stable_config_hash(&loaded.source);
-        let (plan, mut survey, docker_error) = match collect_inventory_for_configuration().await {
-            Ok(inventory) => (
-                build_plan_with_protection(
-                    &loaded.config,
-                    inventory.clone(),
-                    plan_created_at,
-                    &protection,
-                )
-                .map_err(|error| {
-                    RunError::Internal(format!("cannot build TUI snapshot: {error}"))
-                })?,
-                survey_inventory(&inventory),
-                None,
-            ),
-            Err(error) => (
-                Plan {
-                    decisions: Vec::new(),
-                },
-                survey_inventory(&[]),
-                Some(error.to_string()),
-            ),
-        };
+        let (plan, mut survey, observations, docker_error) =
+            startup_snapshot(&loaded, &state_paths, &protection, plan_created_at).await?;
         let plan_id = tui_plan_id(&config_hash, plan_created_at, &plan);
         let history = ActivityJournal::new(state_paths.clone()).completed_passes()?;
         let plan_validity = if docker_error.is_none() {
@@ -211,6 +230,7 @@ impl App {
             &configure_policy,
             &startup_inventory,
             plan_created_at,
+            &observations,
         );
         let configure_row = first_configure_row(&survey);
         let status = docker_error.map_or_else(
@@ -245,6 +265,7 @@ impl App {
             activity_scroll: 0,
             rules_scroll: 0,
             survey,
+            observations,
             configure_selected,
             configure_row,
             configure_profile: PolicyProfile::Workstation,
@@ -276,11 +297,16 @@ impl App {
         let inventory = collect_inventory_for_configuration().await?;
         let plan_created_at = epoch_seconds()?;
         let config_hash = stable_config_hash(&loaded.source);
-        let plan = build_plan_with_protection(
+        let observations =
+            ObservationStore::new(self.state_paths.clone()).record(&inventory, plan_created_at)?;
+        let plan = build_plan_with_context(
             &loaded.config,
             inventory.clone(),
             plan_created_at,
-            &protection,
+            &PlanContext {
+                protection: &protection,
+                observations: &observations,
+            },
         )
         .map_err(|error| RunError::Internal(format!("cannot refresh TUI snapshot: {error}")))?;
         let history = ActivityJournal::new(self.state_paths.clone()).completed_passes()?;
@@ -292,12 +318,14 @@ impl App {
         self.config_hash = config_hash;
         self.plan_validity = PlanValidity::Valid;
         self.history = history;
+        self.observations = observations;
         self.survey = survey_inventory(&inventory);
         refresh_candidate_warnings(
             &mut self.survey,
             &self.configure_policy,
             &inventory,
             plan_created_at,
+            &self.observations,
         );
         self.configure_selected.retain(|id| {
             self.survey
@@ -453,6 +481,7 @@ impl App {
             &self.configure_policy,
             &inventory,
             self.plan_created_at,
+            &self.observations,
         );
     }
 
@@ -527,6 +556,7 @@ impl App {
             policy: Some(&self.configure_policy),
             candidate_ids: &ids,
             now_epoch_seconds: self.plan_created_at,
+            observations: &self.observations,
         })?;
         self.status = format!(
             "Proposal {}: {} pending removals; press s to review save",
@@ -703,6 +733,7 @@ impl App {
             &self.loaded.source,
             &self.plan,
             &self.protection_store,
+            &self.observations,
         )
         .await?;
         activity.finish(&self.plan, &report, epoch_seconds()?)?;
@@ -2604,6 +2635,7 @@ mod tests {
             plan_id: tui_plan_id("config", 1, &plan),
             plan,
             plan_created_at: 1,
+            observations: ObservationState::default(),
             config_hash: "config".to_owned(),
             plan_validity: PlanValidity::Valid,
             history: Vec::new(),
@@ -2668,6 +2700,7 @@ mod tests {
             plan,
             plan_id: "test-plan".to_owned(),
             plan_created_at: 1,
+            observations: ObservationState::default(),
             config_hash: "test-config".to_owned(),
             plan_validity: PlanValidity::Valid,
             history: Vec::new(),
@@ -2746,6 +2779,7 @@ mod tests {
             plan,
             plan_id: "test-plan".to_owned(),
             plan_created_at: 1,
+            observations: ObservationState::default(),
             config_hash: "test-config".to_owned(),
             plan_validity: PlanValidity::Valid,
             history: Vec::new(),

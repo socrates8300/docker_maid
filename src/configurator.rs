@@ -5,7 +5,10 @@ use crate::config::{
     BuildCacheRule, CommonRule, Config, ConfigError, ContainerRule, ImageRule, NetworkRule,
     RuleScope, Rules, Selectors, VolumeRule,
 };
-use crate::plan::{build_plan, Action, InventoryItem, ResourceKind, ResourceState};
+use crate::observation::ObservationState;
+use crate::plan::{
+    build_plan_with_context, Action, InventoryItem, PlanContext, ResourceKind, ResourceState,
+};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -274,6 +277,7 @@ pub fn refresh_candidate_warnings(
     policy: &PolicySettings,
     inventory: &[InventoryItem],
     now_epoch_seconds: i64,
+    observations: &ObservationState,
 ) {
     for candidate in &mut survey.candidates {
         if is_compose_candidate(candidate) {
@@ -282,6 +286,7 @@ pub fn refresh_candidate_warnings(
                 policy,
                 inventory,
                 now_epoch_seconds,
+                observations,
             ));
         }
     }
@@ -338,6 +343,7 @@ pub struct ProposalRequest<'a> {
     pub policy: Option<&'a PolicySettings>,
     pub candidate_ids: &'a [String],
     pub now_epoch_seconds: i64,
+    pub observations: &'a ObservationState,
 }
 
 #[derive(Default)]
@@ -508,6 +514,7 @@ pub fn propose_configuration(
         policy,
         candidate_ids,
         now_epoch_seconds,
+        observations,
     } = *request;
     let policy = policy.cloned().unwrap_or_else(|| profile.settings());
     policy.validate()?;
@@ -557,8 +564,15 @@ pub fn propose_configuration(
         now_epoch_seconds,
         &selected,
         &generated_rule_ids,
+        observations,
     )?;
-    let warnings = selected_candidate_warnings(&selected, &policy, inventory, now_epoch_seconds);
+    let warnings = selected_candidate_warnings(
+        &selected,
+        &policy,
+        inventory,
+        now_epoch_seconds,
+        observations,
+    );
     let inventory_signature = inventory_signature(inventory);
     let mut sorted_candidate_ids = selected_ids.into_iter().collect::<Vec<_>>();
     sorted_candidate_ids.sort();
@@ -702,15 +716,30 @@ fn proposal_preview(
     now_epoch_seconds: i64,
     selected: &[&CandidateFamily],
     generated_rule_ids: &[String],
+    observations: &ObservationState,
 ) -> Result<ProposalPreview, ConfiguratorError> {
-    let before =
-        build_plan(manual_config, inventory.to_vec(), now_epoch_seconds).map_err(|error| {
-            ConfiguratorError::Invalid(format!("cannot preview current policy: {error}"))
-        })?;
-    let after =
-        build_plan(result_config, inventory.to_vec(), now_epoch_seconds).map_err(|error| {
-            ConfiguratorError::Invalid(format!("cannot preview proposed policy: {error}"))
-        })?;
+    let context = PlanContext {
+        observations,
+        ..PlanContext::default()
+    };
+    let before = build_plan_with_context(
+        manual_config,
+        inventory.to_vec(),
+        now_epoch_seconds,
+        &context,
+    )
+    .map_err(|error| {
+        ConfiguratorError::Invalid(format!("cannot preview current policy: {error}"))
+    })?;
+    let after = build_plan_with_context(
+        result_config,
+        inventory.to_vec(),
+        now_epoch_seconds,
+        &context,
+    )
+    .map_err(|error| {
+        ConfiguratorError::Invalid(format!("cannot preview proposed policy: {error}"))
+    })?;
     reject_shadowed_rules(selected, generated_rule_ids, &after)?;
     let before_ids = pending_ids(&before);
     let after_targets = after
@@ -877,6 +906,7 @@ fn selected_candidate_warnings(
     policy: &PolicySettings,
     inventory: &[InventoryItem],
     now_epoch_seconds: i64,
+    observations: &ObservationState,
 ) -> Vec<String> {
     selected
         .iter()
@@ -887,6 +917,7 @@ fn selected_candidate_warnings(
                     policy,
                     inventory,
                     now_epoch_seconds,
+                    observations,
                 ))
             } else {
                 candidate.warning.clone()
@@ -900,6 +931,7 @@ fn compose_future_cleanup_warning(
     policy: &PolicySettings,
     inventory: &[InventoryItem],
     now_epoch_seconds: i64,
+    observations: &ObservationState,
 ) -> String {
     let mut rules = Rules::default();
     if append_candidate_rules(&mut rules, candidate, policy).is_err() {
@@ -911,7 +943,15 @@ fn compose_future_cleanup_warning(
         rules: rules.clone(),
         ..Config::default()
     };
-    let Ok(family_plan) = build_plan(&family_config, inventory.to_vec(), now_epoch_seconds) else {
+    let Ok(family_plan) = build_plan_with_context(
+        &family_config,
+        inventory.to_vec(),
+        now_epoch_seconds,
+        &PlanContext {
+            observations,
+            ..PlanContext::default()
+        },
+    ) else {
         return "WARNING: This Compose family has an invalid generated rule shape; do not write it"
             .to_owned();
     };
@@ -930,20 +970,24 @@ fn compose_future_cleanup_warning(
     for rule in &rules.images {
         if let Some(ttl) = &rule.unused_for {
             effects.push(format!(
-                "unreferenced images become eligible when their resource age exceeds {ttl}"
+                "images become eligible after {ttl} observed unreferenced"
             ));
         }
     }
     for rule in &rules.volumes {
         if let Some(ttl) = &rule.orphan_for {
             effects.push(format!(
-                "detached volumes become eligible immediately when their resource age already exceeds {ttl}"
+                "volumes become eligible after {ttl} observed detached"
             ));
         }
     }
     for rule in &rules.networks {
         if rule.orphan {
-            effects.push("empty networks become eligible immediately".to_owned());
+            let effect = rule.orphan_for.as_ref().map_or_else(
+                || "empty networks become eligible immediately".to_owned(),
+                |ttl| format!("networks become eligible after {ttl} observed empty"),
+            );
+            effects.push(effect);
         }
     }
 
@@ -1081,6 +1125,9 @@ fn push_managed_rule(
         ResourceKind::Network => rules.networks.push(NetworkRule {
             common,
             orphan: true,
+            // A network is exactly as ephemeral as the containers that attach
+            // to it, so it reuses their floor instead of adding a fourth knob.
+            orphan_for: Some(policy.stopped_container_ttl.clone()),
         }),
         ResourceKind::BuildCache => {}
     }
@@ -1432,6 +1479,12 @@ fn set_file_permissions(_path: &Path) -> Result<(), ConfiguratorError> {
 mod tests {
     use super::*;
 
+    /// Treat every unreferenced resource as first observed at epoch zero, so a
+    /// test's `now_epoch_seconds` is the full observed-unreferenced age.
+    fn observations(inventory: &[InventoryItem]) -> ObservationState {
+        ObservationState::default().folded(inventory, 0)
+    }
+
     fn item(kind: ResourceKind, id: &str, name: &str, labels: &[(&str, &str)]) -> InventoryItem {
         InventoryItem {
             kind,
@@ -1482,6 +1535,7 @@ mod tests {
             &PolicyProfile::Workstation.settings(),
             &inventory,
             10_000,
+            &observations(&inventory),
         );
         let warning = survey.candidates[0]
             .warning
@@ -1563,16 +1617,20 @@ mod tests {
         let mut policy = PolicyProfile::Workstation.settings();
         policy.stopped_container_ttl = "3h".to_owned();
         policy.volume_ttl = "5d".to_owned();
-        refresh_candidate_warnings(&mut survey, &policy, &inventory, 10_000);
+        refresh_candidate_warnings(
+            &mut survey,
+            &policy,
+            &inventory,
+            10_000,
+            &observations(&inventory),
+        );
 
         let candidate = &survey.candidates[0];
         let warning = candidate.warning.as_deref().expect("Compose warning");
         assert!(warning.contains("preview zero removals now"));
         assert!(warning.contains("stopped containers become eligible after 3h"));
-        assert!(warning.contains(
-            "detached volumes become eligible immediately when their resource age already exceeds 5d"
-        ));
-        assert!(warning.contains("empty networks become eligible immediately"));
+        assert!(warning.contains("volumes become eligible after 5d observed detached"));
+        assert!(warning.contains("networks become eligible after 3h observed empty"));
 
         let proposal = propose_configuration(&ProposalRequest {
             base_source: "",
@@ -1584,6 +1642,7 @@ mod tests {
             policy: Some(&policy),
             candidate_ids: std::slice::from_ref(&candidate.id),
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         assert_eq!(proposal.preview.after_pending, 0);
@@ -1607,7 +1666,13 @@ mod tests {
         let inventory = vec![container, volume];
         let mut survey = survey_inventory(&inventory);
         let policy = PolicyProfile::Workstation.settings();
-        refresh_candidate_warnings(&mut survey, &policy, &inventory, 1_000_000);
+        refresh_candidate_warnings(
+            &mut survey,
+            &policy,
+            &inventory,
+            1_000_000,
+            &observations(&inventory),
+        );
 
         let candidate = &survey.candidates[0];
         let warning = candidate.warning.as_deref().expect("Compose warning");
@@ -1627,6 +1692,7 @@ mod tests {
             policy: Some(&policy),
             candidate_ids: std::slice::from_ref(&candidate.id),
             now_epoch_seconds: 1_000_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         assert_eq!(proposal.preview.after_pending, 2);
@@ -1647,6 +1713,7 @@ mod tests {
             &PolicyProfile::SharedHost.settings(),
             &inventory,
             10_000,
+            &observations(&inventory),
         );
         let survey_warning = survey.candidates[0]
             .warning
@@ -1663,6 +1730,7 @@ mod tests {
             policy: None,
             candidate_ids: &[survey.candidates[0].id.clone()],
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         assert_eq!(proposal.warnings, vec![survey_warning]);
@@ -1689,6 +1757,7 @@ mod tests {
             policy: None,
             candidate_ids: &ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         let second = propose_configuration(&ProposalRequest {
@@ -1701,6 +1770,7 @@ mod tests {
             policy: None,
             candidate_ids: &ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         assert_eq!(first, second);
@@ -1736,6 +1806,7 @@ mod tests {
             policy: None,
             candidate_ids: &ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect_err("overlap");
         assert!(error.to_string().contains("overlap"));
@@ -1761,6 +1832,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         assert!(
@@ -1800,6 +1872,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("proposal");
         let mut changed_inventory = inventory.clone();
@@ -1843,6 +1916,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("first proposal");
         let first_write = write_proposal(&first, &inventory).expect("first write");
@@ -1861,6 +1935,7 @@ mod tests {
             policy: None,
             candidate_ids: &candidate_ids,
             now_epoch_seconds: 10_000,
+            observations: &observations(&inventory),
         })
         .expect("second proposal");
         let second_write = write_proposal(&second, &inventory).expect("second write");

@@ -83,9 +83,16 @@ has eligible members states its current pending count instead. The warning
 also states what those same rules can remove after `docker compose down` or
 another detach. `config survey` accepts the same `--profile` and TTL override
 flags as `config propose`, so the warning you read during discovery is the
-warning your proposal will carry. In the current policy engine, an old volume
-can become eligible as soon as it detaches because `orphan_for` still uses
-resource creation age; always inspect the new plan before applying it.
+warning your proposal will carry.
+
+Volume, image, and network floors measure **continuous observed-unreferenced
+time**, not resource creation age. docker_maid records first-seen-unreferenced
+in `$XDG_STATE_HOME/docker_maid/observation.toml` on every policy pass. A
+volume that has existed for months and detached a minute ago is one minute old
+by this clock, so adopting a long-running project cannot reap its data on the
+first pass. Attaching a resource again clears its record and a later detach
+starts the clock over. A host that cannot persist that file never accumulates
+time, so nothing there becomes eligible.
 
 Unselected and unlabeled objects remain unowned. The three profiles provide
 editable starting values:
@@ -156,10 +163,13 @@ cargo run -- plan
 
 The planner sorts by resource type, name, and immutable Docker ID. It identifies
 container image, volume, and network references before it evaluates orphan or
-unused policies. In this stateless slice, image `unused_for` and volume
-`orphan_for` are resource-age floors, not duration since last use; Docker does
-not expose a last-used or detach timestamp in these list responses. Built-in
-Docker networks are implicitly protected.
+unused policies. Docker exposes no last-used or detach timestamp, so image
+`unused_for`, volume `orphan_for`, and network `orphan_for` measure how long
+docker_maid has continuously *observed* the resource unreferenced, recorded in
+`$XDG_STATE_HOME/docker_maid/observation.toml`. The first pass that sees a
+resource unreferenced starts its clock at zero and can never remove it.
+Container floors still use Docker's own state timestamps. Built-in Docker
+networks are implicitly protected.
 
 The client uses `DOCKER_HOST` when it is set. Otherwise, it uses Docker's local
 default socket. If a named Docker context uses another socket, export that

@@ -6,7 +6,8 @@ use bollard::Docker;
 use docker_maid::config::{load_config, Config};
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
 use docker_maid::inventory::collect_inventory;
-use docker_maid::plan::{build_plan, Action, Plan, ResourceKind};
+use docker_maid::observation::ObservationState;
+use docker_maid::plan::{build_plan_with_context, Action, Plan, PlanContext, ResourceKind};
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use std::collections::HashMap;
 use std::fs;
@@ -55,13 +56,26 @@ fn network_config(rule_label: &str, protected_name: Option<&str>) -> String {
     )
 }
 
-async fn capture_plan(config_path: &Path) -> (Config, String, Plan) {
+async fn capture_plan(config_path: &Path) -> (Config, String, Plan, ObservationState) {
     let loaded = load_config(Some(config_path), Path::new("."), None).expect("load live config");
     let inventory = collect_inventory(&loaded.config)
         .await
         .expect("collect live inventory");
-    let plan = build_plan(&loaded.config, inventory, now_epoch_seconds()).expect("build live plan");
-    (loaded.config, loaded.source, plan)
+    // These fixtures are created for this test, so treat them as observed
+    // unreferenced since the epoch: the subject here is deletion and
+    // revalidation, not the observed-unreferenced clock itself.
+    let observations = ObservationState::default().folded(&inventory, 0);
+    let plan = build_plan_with_context(
+        &loaded.config,
+        inventory,
+        now_epoch_seconds(),
+        &PlanContext {
+            observations: &observations,
+            ..PlanContext::default()
+        },
+    )
+    .expect("build live plan");
+    (loaded.config, loaded.source, plan, observations)
 }
 
 async fn create_network(docker: &Docker, name: &str, label: &str) {
@@ -157,7 +171,8 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
     create_network(&docker, &referenced_network, &referenced_label).await;
     fs::write(&referenced_config, network_config(&referenced_label, None))
         .expect("write referenced config");
-    let (initial_config, initial_source, plan) = capture_plan(&referenced_config).await;
+    let (initial_config, initial_source, plan, observations) =
+        capture_plan(&referenced_config).await;
     assert_network_target(&plan, &referenced_network);
     let keeper_id =
         create_network_reference(&docker, &reference_container, &referenced_network).await;
@@ -167,6 +182,7 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
         &initial_source,
         &plan,
         &store,
+        &observations,
     )
     .await
     .expect("execute referenced plan");
@@ -183,7 +199,8 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
     create_network(&docker, &protected_network, &protected_label).await;
     fs::write(&protected_config, network_config(&protected_label, None))
         .expect("write initial protection config");
-    let (initial_config, initial_source, plan) = capture_plan(&protected_config).await;
+    let (initial_config, initial_source, plan, observations) =
+        capture_plan(&protected_config).await;
     assert_network_target(&plan, &protected_network);
     fs::write(
         &protected_config,
@@ -196,6 +213,7 @@ async fn live_revalidation_rejects_new_references_and_changed_protection() {
         &initial_source,
         &plan,
         &store,
+        &observations,
     )
     .await
     .expect("execute stale plan");
@@ -227,7 +245,7 @@ async fn live_delete_time_revalidation_honors_new_runtime_protection() {
     let config_path = root.join("runtime-protected.toml");
     create_network(&docker, &network, &label).await;
     fs::write(&config_path, network_config(&label, None)).expect("write runtime protection config");
-    let (initial_config, initial_source, plan) = capture_plan(&config_path).await;
+    let (initial_config, initial_source, plan, observations) = capture_plan(&config_path).await;
     assert_network_target(&plan, &network);
 
     let store = ProtectionStore::new(StatePaths::new(root.join("runtime-state")));
@@ -240,6 +258,7 @@ async fn live_delete_time_revalidation_honors_new_runtime_protection() {
         &initial_source,
         &plan,
         &store,
+        &observations,
     )
     .await
     .expect("execute runtime-protected plan");

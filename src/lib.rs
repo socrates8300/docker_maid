@@ -6,5 +6,6 @@ pub mod configurator;
 pub mod executor;
 pub mod inventory;
 pub mod machine;
+pub mod observation;
 pub mod plan;
 pub mod state;

@@ -1,6 +1,7 @@
 //! Pure policy evaluation and deterministic dry-run plan rendering.
 
 use crate::config::{BuildCacheRule, CommonRule, Config, RuleScope, Selectors};
+use crate::observation::ObservationState;
 use crate::state::ProtectionState;
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
@@ -225,6 +226,29 @@ impl fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
+/// Runtime state that policy evaluation consults besides the configuration.
+///
+/// Both members default to empty, and both defaults are conservative: no
+/// runtime protection, and no observed-unreferenced history, which keeps every
+/// resource whose policy depends on that clock.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanContext<'a> {
+    pub protection: &'a ProtectionState,
+    pub observations: &'a ObservationState,
+}
+
+static NO_PROTECTION: ProtectionState = ProtectionState::empty();
+static NO_OBSERVATIONS: ObservationState = ObservationState::empty();
+
+impl Default for PlanContext<'_> {
+    fn default() -> Self {
+        Self {
+            protection: &NO_PROTECTION,
+            observations: &NO_OBSERVATIONS,
+        }
+    }
+}
+
 /// Evaluate a validated configuration against an immutable inventory snapshot.
 ///
 /// # Errors
@@ -236,11 +260,11 @@ pub fn build_plan(
     inventory: Vec<InventoryItem>,
     now_epoch_seconds: i64,
 ) -> Result<Plan, PlanError> {
-    build_plan_with_protection(
+    build_plan_with_context(
         config,
         inventory,
         now_epoch_seconds,
-        &ProtectionState::default(),
+        &PlanContext::default(),
     )
 }
 
@@ -255,18 +279,33 @@ pub fn build_plan_with_protection(
     now_epoch_seconds: i64,
     runtime_protection: &ProtectionState,
 ) -> Result<Plan, PlanError> {
+    build_plan_with_context(
+        config,
+        inventory,
+        now_epoch_seconds,
+        &PlanContext {
+            protection: runtime_protection,
+            ..PlanContext::default()
+        },
+    )
+}
+
+/// Evaluate configuration against an inventory plus all durable runtime state.
+///
+/// # Errors
+///
+/// Returns an error if a selector or duration cannot be compiled.
+pub fn build_plan_with_context(
+    config: &Config,
+    inventory: Vec<InventoryItem>,
+    now_epoch_seconds: i64,
+    context: &PlanContext<'_>,
+) -> Result<Plan, PlanError> {
     let policy = CompiledPolicy::compile(config)?;
     let build_cache_removals = policy.build_cache_removals(&inventory, now_epoch_seconds);
     let mut decisions = inventory
         .into_iter()
-        .map(|item| {
-            policy.decide(
-                item,
-                now_epoch_seconds,
-                &build_cache_removals,
-                runtime_protection,
-            )
-        })
+        .map(|item| policy.decide(item, now_epoch_seconds, &build_cache_removals, context))
         .collect::<Vec<_>>();
     decisions.sort_by(|left, right| {
         (left.resource.kind, &left.resource.name, &left.resource.id).cmp(&(
@@ -368,6 +407,10 @@ impl CompiledPolicy {
                 Ok(CompiledNetworkRule {
                     common: CompiledCommonRule::compile(&field, &rule.common)?,
                     orphan: rule.orphan,
+                    orphan_for: parse_optional_duration(
+                        &format!("{field}.orphan_for"),
+                        rule.orphan_for.as_deref(),
+                    )?,
                 })
             })
             .collect::<Result<Vec<_>, PlanError>>()?;
@@ -394,20 +437,21 @@ impl CompiledPolicy {
         item: InventoryItem,
         now: i64,
         build_cache_removals: &BTreeMap<String, String>,
-        runtime_protection: &ProtectionState,
+        context: &PlanContext<'_>,
     ) -> Decision {
-        if let Some(reason) = runtime_protection.match_reason(&item) {
+        if let Some(reason) = context.protection.match_reason(&item) {
             return keep(item, Disposition::Protected, None, reason);
         }
         if let Some(reason) = self.protection.match_reason(&item) {
             return keep(item, Disposition::Protected, None, reason);
         }
 
+        let unreferenced_age = context.observations.unreferenced_age(&item, now);
         match item.kind {
             ResourceKind::Container => self.decide_container(item, now),
-            ResourceKind::Image => self.decide_image(item, now),
-            ResourceKind::Volume => self.decide_volume(item, now),
-            ResourceKind::Network => self.decide_network(item, now),
+            ResourceKind::Image => self.decide_image(item, now, unreferenced_age),
+            ResourceKind::Volume => self.decide_volume(item, unreferenced_age),
+            ResourceKind::Network => self.decide_network(item, unreferenced_age),
             ResourceKind::BuildCache => self.decide_build_cache(item, now, build_cache_removals),
         }
     }
@@ -453,7 +497,12 @@ impl CompiledPolicy {
         unowned(item)
     }
 
-    fn decide_image(&self, item: InventoryItem, now: i64) -> Decision {
+    fn decide_image(
+        &self,
+        item: InventoryItem,
+        now: i64,
+        unreferenced_age: Option<u64>,
+    ) -> Decision {
         for rule in &self.images {
             let Some(selector) = rule.common.selector.match_reason(&item) else {
                 continue;
@@ -480,32 +529,35 @@ impl CompiledPolicy {
                     format!("matched {selector}; no image removal predicate matched"),
                 );
             }
-            let age = age_seconds(now, item.created_at);
-            if rule
-                .unused_for
-                .is_some_and(|threshold| age.is_none_or(|value| value < threshold.as_secs()))
-            {
-                return keep(
-                    item,
-                    disposition,
-                    Some(rule.common.name.clone()),
-                    format!(
-                        "matched {selector}; image age is below {} or unavailable",
-                        format_duration(rule.unused_for.unwrap_or_default().as_secs())
-                    ),
-                );
+            if let Some(threshold) = rule.unused_for {
+                if unreferenced_age.is_none_or(|value| value < threshold.as_secs()) {
+                    return keep(
+                        item,
+                        disposition,
+                        Some(rule.common.name.clone()),
+                        observed_wait_reason(
+                            &selector,
+                            "unreferenced",
+                            unreferenced_age,
+                            threshold,
+                        ),
+                    );
+                }
             }
             let predicate = if rule.dangling && item.dangling {
                 "dangling image"
             } else {
                 "image tag pattern"
             };
+            let age = rule
+                .unused_for
+                .map_or_else(|| age_seconds(now, item.created_at), |_| unreferenced_age);
             let reason = rule.unused_for.map_or_else(
                 || format!("matched {selector}; unreferenced {predicate}"),
                 |threshold| {
                     format!(
-                        "matched {selector}; unreferenced {predicate}; resource age {} meets {}",
-                        age.map_or_else(|| "unknown".to_owned(), format_duration),
+                        "matched {selector}; unreferenced {predicate}; observed unreferenced for {} which meets {}",
+                        unreferenced_age.map_or_else(|| "unknown".to_owned(), format_duration),
                         format_duration(threshold.as_secs())
                     )
                 },
@@ -515,7 +567,7 @@ impl CompiledPolicy {
         unowned(item)
     }
 
-    fn decide_volume(&self, item: InventoryItem, now: i64) -> Decision {
+    fn decide_volume(&self, item: InventoryItem, unreferenced_age: Option<u64>) -> Decision {
         for rule in &self.volumes {
             let Some(selector) = rule.common.selector.match_reason(&item) else {
                 continue;
@@ -537,16 +589,15 @@ impl CompiledPolicy {
                     format!("matched {selector}; no orphan age policy is set"),
                 );
             };
-            let age = age_seconds(now, item.created_at);
-            if age.is_some_and(|seconds| seconds >= threshold.as_secs()) {
+            if unreferenced_age.is_some_and(|seconds| seconds >= threshold.as_secs()) {
                 return remove(
                     item,
                     disposition,
                     &rule.common.name,
-                    age,
+                    unreferenced_age,
                     format!(
-                        "matched {selector}; unattached and resource age {} meets {}",
-                        age.map_or_else(|| "unknown".to_owned(), format_duration),
+                        "matched {selector}; observed unattached for {} which meets {}",
+                        unreferenced_age.map_or_else(|| "unknown".to_owned(), format_duration),
                         format_duration(threshold.as_secs())
                     ),
                 );
@@ -555,16 +606,13 @@ impl CompiledPolicy {
                 item,
                 disposition,
                 Some(rule.common.name.clone()),
-                format!(
-                    "matched {selector}; resource age is below {} or unavailable",
-                    format_duration(threshold.as_secs())
-                ),
+                observed_wait_reason(&selector, "unattached", unreferenced_age, threshold),
             );
         }
         unowned(item)
     }
 
-    fn decide_network(&self, item: InventoryItem, now: i64) -> Decision {
+    fn decide_network(&self, item: InventoryItem, unreferenced_age: Option<u64>) -> Decision {
         if item.system {
             return keep(
                 item,
@@ -578,21 +626,41 @@ impl CompiledPolicy {
                 continue;
             };
             let disposition = rule.common.disposition();
-            if rule.orphan && !item.referenced {
-                let age = age_seconds(now, item.created_at);
+            if !rule.orphan || item.referenced {
+                return keep(
+                    item,
+                    disposition,
+                    Some(rule.common.name.clone()),
+                    format!("matched {selector}; network is in use or orphan cleanup is disabled"),
+                );
+            }
+            let Some(threshold) = rule.orphan_for else {
                 return remove(
                     item,
                     disposition,
                     &rule.common.name,
-                    age,
+                    unreferenced_age,
                     format!("matched {selector}; user-defined network has no containers"),
+                );
+            };
+            if unreferenced_age.is_some_and(|seconds| seconds >= threshold.as_secs()) {
+                return remove(
+                    item,
+                    disposition,
+                    &rule.common.name,
+                    unreferenced_age,
+                    format!(
+                        "matched {selector}; observed empty for {} which meets {}",
+                        unreferenced_age.map_or_else(|| "unknown".to_owned(), format_duration),
+                        format_duration(threshold.as_secs())
+                    ),
                 );
             }
             return keep(
                 item,
                 disposition,
                 Some(rule.common.name.clone()),
-                format!("matched {selector}; network is in use or orphan cleanup is disabled"),
+                observed_wait_reason(&selector, "empty", unreferenced_age, threshold),
             );
         }
         unowned(item)
@@ -756,6 +824,7 @@ struct CompiledVolumeRule {
 struct CompiledNetworkRule {
     common: CompiledCommonRule,
     orphan: bool,
+    orphan_for: Option<Duration>,
 }
 
 struct CompiledBuildCacheRule {
@@ -914,6 +983,33 @@ fn keep(
     }
 }
 
+/// Explain a keep whose policy waits on the observed-unreferenced clock.
+///
+/// A resource with no measurement is reported as newly observed rather than as
+/// an unknown age: the first pass that sees it starts its clock at zero.
+fn observed_wait_reason(
+    selector: &str,
+    condition: &str,
+    unreferenced_age: Option<u64>,
+    threshold: Duration,
+) -> String {
+    unreferenced_age.map_or_else(
+        || {
+            format!(
+                "matched {selector}; first observed {condition} now, so its {} clock starts at zero",
+                format_duration(threshold.as_secs())
+            )
+        },
+        |seconds| {
+            format!(
+                "matched {selector}; observed {condition} for {} which is below {}",
+                format_duration(seconds),
+                format_duration(threshold.as_secs())
+            )
+        },
+    )
+}
+
 fn unowned(resource: InventoryItem) -> Decision {
     keep(
         resource,
@@ -1040,8 +1136,20 @@ orphan = true
             .insert("agent.volume".to_owned(), "true".to_owned());
         let network = item(ResourceKind::Network, "agent-n");
 
-        let plan =
-            build_plan(&config, vec![network, volume, image, container], NOW).expect("build plan");
+        // Volumes, images, and networks age on the observed-unreferenced
+        // clock, so this pass supplies a record that started a day ago.
+        let inventory = vec![network, volume, image, container];
+        let observations = ObservationState::default().folded(&inventory, NOW - 86_400);
+        let plan = build_plan_with_context(
+            &config,
+            inventory,
+            NOW,
+            &PlanContext {
+                observations: &observations,
+                ..PlanContext::default()
+            },
+        )
+        .expect("build plan");
 
         assert_eq!(plan.pending_count(), 4);
         assert_eq!(plan.decisions[0].resource.kind, ResourceKind::Container);
@@ -1051,8 +1159,8 @@ orphan = true
             concat!(
                 "TYPE       NAME            STATE      AGE  DISPOSITION  RULE        ACTION  REASON\n",
                 "container  agent-c         stopped    2h   owned        containers  remove  matched name regex ^agent-c; state age 2h meets 1h\n",
-                "image      agent-i:latest  available  1d   owned        images      remove  matched name part agent-i; unreferenced dangling image; resource age 1d meets 1h\n",
-                "volume     agent-v         available  1d   owned        volumes     remove  matched label agent.volume=true (agent.volume=true); unattached and resource age 1d meets 1h\n",
+                "image      agent-i:latest  available  1d   owned        images      remove  matched name part agent-i; unreferenced dangling image; observed unreferenced for 1d which meets 1h\n",
+                "volume     agent-v         available  1d   owned        volumes     remove  matched label agent.volume=true (agent.volume=true); observed unattached for 1d which meets 1h\n",
                 "network    agent-n         available  1d   owned        networks    remove  matched name regex ^agent-n; user-defined network has no containers\n",
                 "\nPending removals: 4\n",
                 "Scanned: containers=1 images=1 volumes=1 networks=1 build_cache=0\n",
@@ -1181,11 +1289,16 @@ orphan_for = "1s"
             }],
         };
 
-        let plan = build_plan_with_protection(
+        let inventory = vec![item(ResourceKind::Network, "shared"), volume];
+        let observations = ObservationState::default().folded(&inventory, NOW - 60);
+        let plan = build_plan_with_context(
             &config,
-            vec![item(ResourceKind::Network, "shared"), volume],
+            inventory,
             NOW,
-            &protection,
+            &PlanContext {
+                protection: &protection,
+                observations: &observations,
+            },
         )
         .expect("plan");
 
@@ -1275,6 +1388,170 @@ dangling = true
             plan.render_table(),
             "No removals pending.\nScanned: containers=1 images=1 volumes=0 networks=0 build_cache=0\n"
         );
+    }
+
+    #[test]
+    fn an_old_volume_freshly_detached_survives_its_first_observation() {
+        let config = config(
+            r#"
+[[rules.volumes]]
+name = "volumes"
+select.names = ["^data$"]
+orphan_for = "1h"
+"#,
+        );
+        // Six months old, detached seconds ago: the creation-age reading would
+        // delete it immediately. The observed clock starts now instead.
+        let mut volume = item(ResourceKind::Volume, "data");
+        volume.created_at = Some(NOW - 15_552_000);
+        let inventory = vec![volume];
+
+        let first = ObservationState::default().folded(&inventory, NOW);
+        let plan = build_plan_with_context(
+            &config,
+            inventory.clone(),
+            NOW,
+            &PlanContext {
+                observations: &first,
+                ..PlanContext::default()
+            },
+        )
+        .expect("first pass");
+        assert_eq!(plan.pending_count(), 0);
+        assert!(plan.decisions[0]
+            .reason
+            .contains("observed unattached for 0s which is below 1h"));
+
+        // Only after a full TTL of continuous detachment does it become eligible.
+        let later = NOW + 3_600;
+        let carried = first.folded(&inventory, later);
+        let plan = build_plan_with_context(
+            &config,
+            inventory,
+            later,
+            &PlanContext {
+                observations: &carried,
+                ..PlanContext::default()
+            },
+        )
+        .expect("later pass");
+        assert_eq!(plan.pending_count(), 1);
+        assert!(plan.decisions[0]
+            .reason
+            .contains("observed unattached for 1h which meets 1h"));
+    }
+
+    #[test]
+    fn a_network_emptied_by_compose_down_waits_for_its_orphan_floor() {
+        let config = config(
+            r#"
+[[rules.networks]]
+name = "networks"
+select.names = ["^project_default$"]
+orphan = true
+orphan_for = "2h"
+"#,
+        );
+        let network = item(ResourceKind::Network, "project_default");
+        let inventory = vec![network];
+
+        let first = ObservationState::default().folded(&inventory, NOW);
+        let plan = build_plan_with_context(
+            &config,
+            inventory.clone(),
+            NOW,
+            &PlanContext {
+                observations: &first,
+                ..PlanContext::default()
+            },
+        )
+        .expect("first pass");
+        assert_eq!(plan.pending_count(), 0);
+
+        let later = NOW + 7_200;
+        let carried = first.folded(&inventory, later);
+        let plan = build_plan_with_context(
+            &config,
+            inventory,
+            later,
+            &PlanContext {
+                observations: &carried,
+                ..PlanContext::default()
+            },
+        )
+        .expect("later pass");
+        assert_eq!(plan.pending_count(), 1);
+        assert!(plan.decisions[0]
+            .reason
+            .contains("observed empty for 2h which meets 2h"));
+    }
+
+    #[test]
+    fn a_reattached_resource_restarts_its_clock_and_survives() {
+        let config = config(
+            r#"
+[[rules.volumes]]
+name = "volumes"
+select.names = ["^data$"]
+orphan_for = "1h"
+"#,
+        );
+        let detached = vec![item(ResourceKind::Volume, "data")];
+        let mut attached_item = item(ResourceKind::Volume, "data");
+        attached_item.referenced = true;
+        let attached = vec![attached_item];
+
+        let aged = ObservationState::default().folded(&detached, NOW - 7_200);
+        let reattached = aged.folded(&attached, NOW);
+        let detached_again = reattached.folded(&detached, NOW);
+
+        let plan = build_plan_with_context(
+            &config,
+            detached.clone(),
+            NOW,
+            &PlanContext {
+                observations: &detached_again,
+                ..PlanContext::default()
+            },
+        )
+        .expect("plan");
+        assert_eq!(plan.pending_count(), 0);
+    }
+
+    #[test]
+    fn without_durable_state_nothing_accumulates_or_is_removed() {
+        let config = config(
+            r#"
+[[rules.volumes]]
+name = "volumes"
+select.names = ["^data$"]
+orphan_for = "1s"
+
+[[rules.images]]
+name = "images"
+select.names = ["^stale$"]
+dangling = true
+unused_for = "1s"
+
+[[rules.networks]]
+name = "networks"
+select.names = ["^empty$"]
+orphan = true
+orphan_for = "1s"
+"#,
+        );
+        let mut image = item(ResourceKind::Image, "stale");
+        image.dangling = true;
+        let inventory = vec![
+            item(ResourceKind::Volume, "data"),
+            image,
+            item(ResourceKind::Network, "empty"),
+        ];
+
+        // An ephemeral host that cannot persist the record never accumulates
+        // observed time, so every pass keeps every resource.
+        let plan = build_plan(&config, inventory, NOW).expect("plan");
+        assert_eq!(plan.pending_count(), 0);
     }
 
     #[test]

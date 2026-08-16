@@ -2,8 +2,9 @@
 
 use crate::config::{load_config, Config, LoadedConfig};
 use crate::inventory::{collect_inventory, InventoryError};
+use crate::observation::ObservationState;
 use crate::plan::{
-    build_plan_with_protection, Action, Decision, Plan, ResourceKind, ResourceState,
+    build_plan_with_context, Action, Decision, Plan, PlanContext, ResourceKind, ResourceState,
 };
 use crate::state::{ProtectionState, ProtectionStore, StateError};
 use bollard::errors::Error as BollardError;
@@ -167,6 +168,7 @@ pub async fn execute_plan(
     initial_source: &str,
     initial_plan: &Plan,
     protection_store: &ProtectionStore,
+    observations: &ObservationState,
 ) -> Result<ExecutionReport, ExecutionError> {
     let docker = Docker::connect_with_defaults().map_err(ExecutionError::DockerSetup)?;
     let targets = ordered_removal_targets(initial_plan);
@@ -183,6 +185,7 @@ pub async fn execute_plan(
             initial_source,
             &target,
             protection.state(),
+            observations,
         )
         .await;
         outcomes.push(outcome);
@@ -198,6 +201,7 @@ async fn process_target(
     initial_source: &str,
     target: &Decision,
     runtime_protection: &ProtectionState,
+    observations: &ObservationState,
 ) -> TargetOutcome {
     let revalidated = revalidate(
         config_path,
@@ -205,6 +209,7 @@ async fn process_target(
         initial_source,
         target,
         runtime_protection,
+        observations,
     )
     .await;
     match revalidated {
@@ -300,6 +305,7 @@ async fn revalidate(
     initial_source: &str,
     target: &Decision,
     runtime_protection: &ProtectionState,
+    observations: &ObservationState,
 ) -> Result<Decision, String> {
     let loaded = load_config(Some(config_path), Path::new("."), None)
         .map_err(|error| format!("revalidation could not load configuration: {error}"))?;
@@ -311,9 +317,16 @@ async fn revalidate(
         .await
         .map_err(|error| revalidation_inventory_error(&error))?;
     let now = epoch_seconds().map_err(|error| format!("revalidation failed: {error}"))?;
-    let current_plan =
-        build_plan_with_protection(&loaded.config, inventory, now, runtime_protection)
-            .map_err(|error| format!("revalidation could not rebuild the plan: {error}"))?;
+    let current_plan = build_plan_with_context(
+        &loaded.config,
+        inventory,
+        now,
+        &PlanContext {
+            protection: runtime_protection,
+            observations,
+        },
+    )
+    .map_err(|error| format!("revalidation could not rebuild the plan: {error}"))?;
     select_revalidated_target(target, &current_plan).cloned()
 }
 

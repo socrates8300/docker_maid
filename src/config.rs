@@ -26,6 +26,17 @@ pub const DEFAULT_CONFIG: &str = r#"# docker_maid configuration
 # stopped_ttl = "24h"
 # select.labels = ["com.example.owner=agent"]
 
+# Volume, image, and network age floors measure continuous observed-unreferenced
+# time, recorded under $XDG_STATE_HOME/docker_maid/observation.toml. The first
+# pass that sees a resource unreferenced starts its clock at zero.
+#
+# [[rules.networks]]
+# id = "manual/example-network-rule"
+# name = "example-networks"
+# orphan = true
+# orphan_for = "2h"
+# select.labels = ["com.example.owner=agent"]
+
 # Build cache has no labels or names. It is always a separate, explicit,
 # authorized-unscoped decision:
 # [rules.build_cache]
@@ -223,6 +234,11 @@ impl Config {
                 &mut rule_ids,
                 &mut errors,
             );
+            validate_duration(
+                &format!("{field}.orphan_for"),
+                rule.orphan_for.as_deref(),
+                &mut errors,
+            );
         }
 
         validate_build_cache(self.rules.build_cache.as_ref(), &mut rule_ids, &mut errors);
@@ -384,6 +400,8 @@ pub struct NetworkRule {
     #[serde(flatten)]
     pub common: CommonRule,
     pub orphan: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphan_for: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -9,7 +9,8 @@ use docker_maid::configurator::{
 use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::{collect_inventory, collect_inventory_for_configuration};
 use docker_maid::machine;
-use docker_maid::plan::{build_plan_with_protection, Action, Disposition, Plan};
+use docker_maid::observation::{ObservationState, ObservationStore};
+use docker_maid::plan::{build_plan_with_context, Action, Disposition, Plan, PlanContext};
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -473,13 +474,32 @@ fn render_config_validation(
     Ok(())
 }
 
+/// Read the observed-unreferenced record for a configuration-time preview.
+///
+/// Configuration surfaces read this clock but never advance it: only a policy
+/// pass observes. A host without durable state simply previews nothing as
+/// eligible, which is the same conservative answer the policy engine gives.
+fn configuration_observations() -> Result<ObservationState, RunError> {
+    match StatePaths::from_env() {
+        Ok(paths) => Ok(ObservationStore::new(paths).snapshot()?),
+        Err(_) => Ok(ObservationState::default()),
+    }
+}
+
 async fn run_config_survey(
     policy: &PolicySettings,
     format: OutputFormat,
 ) -> Result<RunOutcome, RunError> {
     let inventory = collect_inventory_for_configuration().await?;
     let mut survey = survey_inventory(&inventory);
-    refresh_candidate_warnings(&mut survey, policy, &inventory, epoch_seconds()?);
+    let observations = configuration_observations()?;
+    refresh_candidate_warnings(
+        &mut survey,
+        policy,
+        &inventory,
+        epoch_seconds()?,
+        &observations,
+    );
     if format == OutputFormat::Json {
         write_serializable_payload(&survey)?;
     } else {
@@ -524,6 +544,7 @@ async fn run_config_propose(
         policy: Some(policy),
         candidate_ids: &selected,
         now_epoch_seconds: epoch_seconds()?,
+        observations: &configuration_observations()?,
     })?;
     if format == OutputFormat::Json {
         write_serializable_payload(&proposal)?;
@@ -719,6 +740,7 @@ struct PreparedCleanup {
     loaded: LoadedConfig,
     state_paths: StatePaths,
     protection_store: ProtectionStore,
+    observations: ObservationState,
     plan: Plan,
 }
 
@@ -744,11 +766,16 @@ async fn prepare_cleanup(
     let protection_store = ProtectionStore::new(state_paths.clone());
     let runtime_protection = protection_store.snapshot()?;
     let inventory = collect_inventory(&loaded.config).await?;
-    let plan = build_plan_with_protection(
+    let now = epoch_seconds()?;
+    let observations = ObservationStore::new(state_paths.clone()).record(&inventory, now)?;
+    let plan = build_plan_with_context(
         &loaded.config,
         inventory,
-        epoch_seconds()?,
-        &runtime_protection,
+        now,
+        &PlanContext {
+            protection: &runtime_protection,
+            observations: &observations,
+        },
     )
     .map_err(|error| RunError::Internal(format!("cannot build plan: {error}")))?;
 
@@ -756,6 +783,7 @@ async fn prepare_cleanup(
         loaded,
         state_paths,
         protection_store,
+        observations,
         plan,
     })
 }
@@ -808,6 +836,7 @@ async fn apply_cleanup(
             &prepared.loaded.source,
             &prepared.plan,
             &prepared.protection_store,
+            &prepared.observations,
         )
         .await?
     } else {
@@ -1122,8 +1151,18 @@ async fn run_status(
     let paths = StatePaths::from_env()?;
     let protection = ProtectionStore::new(paths.clone()).snapshot()?;
     let inventory = collect_inventory(&loaded.config).await?;
-    let plan = build_plan_with_protection(&loaded.config, inventory, epoch_seconds()?, &protection)
-        .map_err(|error| RunError::Internal(format!("cannot build status: {error}")))?;
+    let now = epoch_seconds()?;
+    let observations = ObservationStore::new(paths.clone()).record(&inventory, now)?;
+    let plan = build_plan_with_context(
+        &loaded.config,
+        inventory,
+        now,
+        &PlanContext {
+            protection: &protection,
+            observations: &observations,
+        },
+    )
+    .map_err(|error| RunError::Internal(format!("cannot build status: {error}")))?;
     let last_pass = ActivityJournal::new(paths).last_completed_pass()?;
     for rule in regressed_rules(&plan, last_pass.as_ref()) {
         write_warning_diagnostic(

@@ -33,7 +33,7 @@ Stable error kinds are:
 |---|---:|---|
 | `config_invalid` | `3` | Configuration is missing, unreadable, or invalid |
 | `docker_unreachable` | `5` | Docker is unavailable or incompatible |
-| `state_io` | `6` | Protection or activity state cannot be used safely |
+| `state_io` | `6` | Protection, observation, or activity state cannot be used safely |
 | `partial_failure` | `2` | An applied pass skipped or failed at least one target |
 | `internal` | `7` | Output or an internal invariant failed |
 | `usage` | `64` | Command-line invocation is invalid |
@@ -142,6 +142,14 @@ A rule is `regressed` only when its previous completed pass match count was non-
 `protect` and `unprotect` return `command`, `resource_kind`, `changed`, and `total_runtime_protection_entries`.
 
 `config default`, `config check`, and `config print` return `command`, `path`, and the parsed `configuration` object. `path` is `null` for the built-in default.
+
+Volume, image, and network age floors measure continuous observed-unreferenced
+time from `$XDG_STATE_HOME/docker_maid/observation.toml`, which every policy
+pass (`plan`, `clean`, `daemon`, `status`, and the TUI) updates under an
+exclusive `observation.lock` with an atomic replace. A resource observed
+unreferenced for the first time reports an age of zero, so it is never removed
+by that pass; becoming referenced again clears its record. `config survey` and
+`config propose` read this record but never advance it.
 
 `config survey --format json` returns a schema-versioned document with a
 stable `snapshot_id`, inventory summary, and sorted `candidates`. Each

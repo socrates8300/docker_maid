@@ -113,6 +113,15 @@ impl Default for ProtectionState {
 }
 
 impl ProtectionState {
+    /// A protection set with no entries, usable in a `const` context.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
+
     /// Return the runtime protection reason for an inventory item.
     #[must_use]
     pub fn match_reason(&self, item: &InventoryItem) -> Option<String> {
@@ -195,6 +204,16 @@ impl StatePaths {
     #[must_use]
     pub fn protection_lock(&self) -> PathBuf {
         self.root.join("protection.lock")
+    }
+
+    #[must_use]
+    pub fn observation_file(&self) -> PathBuf {
+        self.root.join("observation.toml")
+    }
+
+    #[must_use]
+    pub fn observation_lock(&self) -> PathBuf {
+        self.root.join("observation.lock")
     }
 
     #[must_use]
