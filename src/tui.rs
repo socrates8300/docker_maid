@@ -18,7 +18,7 @@ use docker_maid::configurator::{
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
 use docker_maid::inventory::collect_inventory_for_configuration;
 use docker_maid::plan::{
-    build_plan_with_protection, Action, Decision, Disposition, Plan, ResourceKind,
+    build_plan_with_protection, Action, Decision, Disposition, InventoryItem, Plan, ResourceKind,
 };
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
 use futures_util::StreamExt;
@@ -201,7 +201,17 @@ impl App {
             PlanValidity::Stale
         };
         let configure_policy = PolicyProfile::Workstation.settings();
-        refresh_candidate_warnings(&mut survey, &configure_policy);
+        let startup_inventory = plan
+            .decisions
+            .iter()
+            .map(|decision| decision.resource.clone())
+            .collect::<Vec<_>>();
+        refresh_candidate_warnings(
+            &mut survey,
+            &configure_policy,
+            &startup_inventory,
+            plan_created_at,
+        );
         let configure_row = first_configure_row(&survey);
         let status = docker_error.map_or_else(
             || startup_status(&loaded, built_in_config, &plan),
@@ -283,7 +293,12 @@ impl App {
         self.plan_validity = PlanValidity::Valid;
         self.history = history;
         self.survey = survey_inventory(&inventory);
-        refresh_candidate_warnings(&mut self.survey, &self.configure_policy);
+        refresh_candidate_warnings(
+            &mut self.survey,
+            &self.configure_policy,
+            &inventory,
+            plan_created_at,
+        );
         self.configure_selected.retain(|id| {
             self.survey
                 .candidates
@@ -424,9 +439,29 @@ impl App {
             .min(PolicyProfile::ALL.len() - 1);
         self.configure_profile = PolicyProfile::ALL[next];
         self.configure_policy = self.configure_profile.settings();
-        refresh_candidate_warnings(&mut self.survey, &self.configure_policy);
+        self.refresh_survey_warnings();
         self.config_proposal = None;
         self.status = format!("Policy profile: {}", self.configure_profile.title());
+    }
+
+    /// Recompute Compose warnings from the current policy against the same
+    /// inventory snapshot and clock the proposal preview uses.
+    fn refresh_survey_warnings(&mut self) {
+        let inventory = self.inventory_snapshot();
+        refresh_candidate_warnings(
+            &mut self.survey,
+            &self.configure_policy,
+            &inventory,
+            self.plan_created_at,
+        );
+    }
+
+    fn inventory_snapshot(&self) -> Vec<InventoryItem> {
+        self.plan
+            .decisions
+            .iter()
+            .map(|decision| decision.resource.clone())
+            .collect()
     }
 
     fn cycle_policy_field(&mut self, delta: isize) {
@@ -456,7 +491,7 @@ impl App {
         set_policy_field(field, &mut next_policy, self.prefix_input.trim())?;
         next_policy.validate()?;
         self.configure_policy = next_policy;
-        refresh_candidate_warnings(&mut self.survey, &self.configure_policy);
+        self.refresh_survey_warnings();
         self.config_proposal = None;
         self.editor = Editor::None;
         self.status = format!(
@@ -480,12 +515,7 @@ impl App {
                 .as_deref()
                 .map(Path::new),
         )?;
-        let inventory = self
-            .plan
-            .decisions
-            .iter()
-            .map(|decision| decision.resource.clone())
-            .collect::<Vec<_>>();
+        let inventory = self.inventory_snapshot();
         let ids = self.configure_selected.iter().cloned().collect::<Vec<_>>();
         let proposal = propose_configuration(&ProposalRequest {
             base_source: &self.loaded.source,
@@ -528,12 +558,7 @@ impl App {
 
     fn accept_prefix(&mut self) -> Result<(), RunError> {
         let kind = self.inventory_kind;
-        let inventory = self
-            .plan
-            .decisions
-            .iter()
-            .map(|decision| decision.resource.clone())
-            .collect::<Vec<_>>();
+        let inventory = self.inventory_snapshot();
         let id = add_name_prefix_candidate(
             &mut self.survey,
             &inventory,

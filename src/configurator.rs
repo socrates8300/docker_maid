@@ -266,10 +266,23 @@ pub fn candidate_display_indices(candidates: &[CandidateFamily]) -> Vec<usize> {
 
 /// Recompute policy-specific warnings without changing candidate identity or
 /// canonical order.
-pub fn refresh_candidate_warnings(survey: &mut ConfiguratorSurvey, policy: &PolicySettings) {
+///
+/// The current inventory and clock decide whether a family truthfully claims a
+/// zero-removal preview or must state its current pending count.
+pub fn refresh_candidate_warnings(
+    survey: &mut ConfiguratorSurvey,
+    policy: &PolicySettings,
+    inventory: &[InventoryItem],
+    now_epoch_seconds: i64,
+) {
     for candidate in &mut survey.candidates {
         if is_compose_candidate(candidate) {
-            candidate.warning = Some(compose_future_cleanup_warning(candidate, policy));
+            candidate.warning = Some(compose_future_cleanup_warning(
+                candidate,
+                policy,
+                inventory,
+                now_epoch_seconds,
+            ));
         }
     }
 }
@@ -393,9 +406,7 @@ pub fn survey_inventory(inventory: &[InventoryItem]) -> ConfiguratorSurvey {
         }
     }
 
-    let mut survey = finish_survey(inventory, groups);
-    refresh_candidate_warnings(&mut survey, &PolicyProfile::Workstation.settings());
-    survey
+    finish_survey(inventory, groups)
 }
 
 /// Add an operator-chosen name prefix to an existing survey.
@@ -547,16 +558,7 @@ pub fn propose_configuration(
         &selected,
         &generated_rule_ids,
     )?;
-    let warnings = selected
-        .iter()
-        .filter_map(|candidate| {
-            if is_compose_candidate(candidate) {
-                Some(compose_future_cleanup_warning(candidate, &policy))
-            } else {
-                candidate.warning.clone()
-            }
-        })
-        .collect::<Vec<_>>();
+    let warnings = selected_candidate_warnings(&selected, &policy, inventory, now_epoch_seconds);
     let inventory_signature = inventory_signature(inventory);
     let mut sorted_candidate_ids = selected_ids.into_iter().collect::<Vec<_>>();
     sorted_candidate_ids.sort();
@@ -870,13 +872,54 @@ fn is_compose_candidate(candidate: &CandidateFamily) -> bool {
     )
 }
 
-fn compose_future_cleanup_warning(candidate: &CandidateFamily, policy: &PolicySettings) -> String {
+fn selected_candidate_warnings(
+    selected: &[&CandidateFamily],
+    policy: &PolicySettings,
+    inventory: &[InventoryItem],
+    now_epoch_seconds: i64,
+) -> Vec<String> {
+    selected
+        .iter()
+        .filter_map(|candidate| {
+            if is_compose_candidate(candidate) {
+                Some(compose_future_cleanup_warning(
+                    candidate,
+                    policy,
+                    inventory,
+                    now_epoch_seconds,
+                ))
+            } else {
+                candidate.warning.clone()
+            }
+        })
+        .collect()
+}
+
+fn compose_future_cleanup_warning(
+    candidate: &CandidateFamily,
+    policy: &PolicySettings,
+    inventory: &[InventoryItem],
+    now_epoch_seconds: i64,
+) -> String {
     let mut rules = Rules::default();
     if append_candidate_rules(&mut rules, candidate, policy).is_err() {
         return "WARNING: This Compose family has an invalid generated rule shape; do not write it"
             .to_owned();
     }
     sort_rules(&mut rules);
+    let family_config = Config {
+        rules: rules.clone(),
+        ..Config::default()
+    };
+    let Ok(family_plan) = build_plan(&family_config, inventory.to_vec(), now_epoch_seconds) else {
+        return "WARNING: This Compose family has an invalid generated rule shape; do not write it"
+            .to_owned();
+    };
+    let pending_now = family_plan
+        .decisions
+        .iter()
+        .filter(|decision| decision.action == Action::Remove)
+        .count();
 
     let mut effects = Vec::new();
     for rule in &rules.containers {
@@ -909,9 +952,15 @@ fn compose_future_cleanup_warning(candidate: &CandidateFamily, policy: &PolicySe
     } else {
         effects.join("; ")
     };
-    format!(
-        "WARNING: Running and referenced Compose resources stay, so this stack can preview zero removals now. After `docker compose down` or another detach, the generated rules apply: {effect_text}. Preview the plan again before applying."
-    )
+    if pending_now == 0 {
+        format!(
+            "WARNING: Running and referenced Compose resources stay, so this stack can preview zero removals now. After `docker compose down` or another detach, the generated rules apply: {effect_text}. Preview the plan again before applying."
+        )
+    } else {
+        format!(
+            "WARNING: This stack currently previews {pending_now} pending removal(s) under the generated rules. After `docker compose down` or another detach, the generated rules apply: {effect_text}. Preview the plan again before applying."
+        )
+    }
 }
 
 fn generated_rules(
@@ -1420,7 +1469,7 @@ mod tests {
             ),
             item(ResourceKind::Volume, "v1", "unowned", &[]),
         ];
-        let survey = survey_inventory(&inventory);
+        let mut survey = survey_inventory(&inventory);
         assert_eq!(survey.candidates.len(), 1);
         assert_eq!(survey.summary.candidate_resources, 1);
         assert_eq!(survey.summary.unowned_resources, 1);
@@ -1428,6 +1477,12 @@ mod tests {
             survey.candidates[0].selector,
             CandidateSelector::ExactLabel { .. }
         ));
+        refresh_candidate_warnings(
+            &mut survey,
+            &PolicyProfile::Workstation.settings(),
+            &inventory,
+            10_000,
+        );
         let warning = survey.candidates[0]
             .warning
             .as_deref()
@@ -1508,7 +1563,7 @@ mod tests {
         let mut policy = PolicyProfile::Workstation.settings();
         policy.stopped_container_ttl = "3h".to_owned();
         policy.volume_ttl = "5d".to_owned();
-        refresh_candidate_warnings(&mut survey, &policy);
+        refresh_candidate_warnings(&mut survey, &policy, &inventory, 10_000);
 
         let candidate = &survey.candidates[0];
         let warning = candidate.warning.as_deref().expect("Compose warning");
@@ -1533,6 +1588,84 @@ mod tests {
         .expect("proposal");
         assert_eq!(proposal.preview.after_pending, 0);
         assert_eq!(proposal.warnings, vec![warning.to_owned()]);
+    }
+
+    #[test]
+    fn compose_warning_states_pending_count_instead_of_zero_claim_when_past_ttl() {
+        let container = item(
+            ResourceKind::Container,
+            "c1",
+            "project-web",
+            &[("com.docker.compose.project", "project")],
+        );
+        let volume = item(
+            ResourceKind::Volume,
+            "v1",
+            "project-data",
+            &[("com.docker.compose.project", "project")],
+        );
+        let inventory = vec![container, volume];
+        let mut survey = survey_inventory(&inventory);
+        let policy = PolicyProfile::Workstation.settings();
+        refresh_candidate_warnings(&mut survey, &policy, &inventory, 1_000_000);
+
+        let candidate = &survey.candidates[0];
+        let warning = candidate.warning.as_deref().expect("Compose warning");
+        assert!(!warning.contains("zero removals now"), "{warning}");
+        assert!(
+            warning.contains("currently previews 2 pending removal(s)"),
+            "{warning}"
+        );
+
+        let proposal = propose_configuration(&ProposalRequest {
+            base_source: "",
+            source_existed: false,
+            target_path: Path::new("config.toml"),
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::Workstation,
+            policy: Some(&policy),
+            candidate_ids: std::slice::from_ref(&candidate.id),
+            now_epoch_seconds: 1_000_000,
+        })
+        .expect("proposal");
+        assert_eq!(proposal.preview.after_pending, 2);
+        assert_eq!(proposal.warnings, vec![warning.to_owned()]);
+    }
+
+    #[test]
+    fn survey_and_proposal_warnings_are_byte_identical_for_a_profile() {
+        let inventory = vec![item(
+            ResourceKind::Network,
+            "n1",
+            "project_default",
+            &[("com.docker.compose.project", "project")],
+        )];
+        let mut survey = survey_inventory(&inventory);
+        refresh_candidate_warnings(
+            &mut survey,
+            &PolicyProfile::SharedHost.settings(),
+            &inventory,
+            10_000,
+        );
+        let survey_warning = survey.candidates[0]
+            .warning
+            .clone()
+            .expect("Compose warning");
+
+        let proposal = propose_configuration(&ProposalRequest {
+            base_source: "",
+            source_existed: false,
+            target_path: Path::new("config.toml"),
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::SharedHost,
+            policy: None,
+            candidate_ids: &[survey.candidates[0].id.clone()],
+            now_epoch_seconds: 10_000,
+        })
+        .expect("proposal");
+        assert_eq!(proposal.warnings, vec![survey_warning]);
     }
 
     #[test]

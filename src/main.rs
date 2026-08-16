@@ -3,8 +3,8 @@ use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, 
 use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
 use docker_maid::configurator::{
     add_name_prefix_candidate, candidate_display_indices, configuration_target_path,
-    propose_configuration, survey_inventory, write_proposal, ConfigProposal, ConfiguratorError,
-    PolicyProfile, PolicySettings, ProposalRequest,
+    propose_configuration, refresh_candidate_warnings, survey_inventory, write_proposal,
+    ConfigProposal, ConfiguratorError, PolicyProfile, PolicySettings, ProposalRequest,
 };
 use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::{collect_inventory, collect_inventory_for_configuration};
@@ -123,7 +123,13 @@ enum ConfigCommand {
     /// Print an annotated default configuration.
     Default,
     /// Discover exact ownership evidence from the current Docker daemon.
-    Survey,
+    Survey {
+        /// Safety profile that computes the Compose cleanup warnings.
+        #[arg(long, default_value = "workstation")]
+        profile: PolicyProfile,
+        #[command(flatten)]
+        overrides: PolicyOverrideArgs,
+    },
     /// Build a deterministic, reviewable proposal without writing config.
     Propose {
         /// Safety profile for the selected ownership families.
@@ -404,7 +410,10 @@ async fn run_config_command(
             }
             Ok(RunOutcome::Success)
         }
-        ConfigCommand::Survey => run_config_survey(format).await,
+        ConfigCommand::Survey { profile, overrides } => {
+            let settings = overrides.settings(profile)?;
+            run_config_survey(&settings, format).await
+        }
         ConfigCommand::Propose {
             profile,
             candidates,
@@ -464,9 +473,13 @@ fn render_config_validation(
     Ok(())
 }
 
-async fn run_config_survey(format: OutputFormat) -> Result<RunOutcome, RunError> {
+async fn run_config_survey(
+    policy: &PolicySettings,
+    format: OutputFormat,
+) -> Result<RunOutcome, RunError> {
     let inventory = collect_inventory_for_configuration().await?;
-    let survey = survey_inventory(&inventory);
+    let mut survey = survey_inventory(&inventory);
+    refresh_candidate_warnings(&mut survey, policy, &inventory, epoch_seconds()?);
     if format == OutputFormat::Json {
         write_serializable_payload(&survey)?;
     } else {

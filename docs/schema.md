@@ -146,10 +146,16 @@ A rule is `regressed` only when its previous completed pass match count was non-
 `config survey --format json` returns a schema-versioned document with a
 stable `snapshot_id`, inventory summary, and sorted `candidates`. Each
 candidate contains its stable ID, exact evidence, selector type, current
-resource IDs, known bytes, and any computed safety warning. Compose warnings
-describe the generated rules' future cleanup behavior after the stack stops or
-detaches. JSON keeps canonical candidate order; human renderers may order the
-same candidates for readability without changing their identities or indexes.
+resource IDs, known bytes, and any computed safety warning. `config survey`
+accepts the same `--profile` and TTL override flags as `config propose`
+(default `workstation`) and computes Compose warnings from those values, so a
+survey warning and a propose warning agree for the same policy. A Compose
+warning describes the generated rules' future cleanup behavior after the stack
+stops or detaches; when the family already previews pending removals under
+those rules, the warning states that current count instead of claiming a
+zero-removal preview. `snapshot_id` never depends on warning text. JSON keeps
+canonical candidate order; human renderers may order the same candidates for
+readability without changing their identities or indexes.
 
 `config propose --format json` returns the complete write artifact. It includes
 the stable proposal and snapshot IDs, target path, base and result hashes,

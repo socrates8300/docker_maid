@@ -77,11 +77,15 @@ candidate vector unchanged so candidate IDs and TUI selection indexes remain
 stable.
 
 Compose candidates carry a warning computed from the rules that the proposal
-will generate. A running or referenced stack can correctly preview zero
-removals. The warning also states what those same rules can remove after
-`docker compose down` or another detach. In the current policy engine, an old
-volume can become eligible as soon as it detaches because `orphan_for` still
-uses resource creation age; always inspect the new plan before applying it.
+will generate, evaluated against the current inventory. A running or
+referenced stack says it can preview zero removals now; a family that already
+has eligible members states its current pending count instead. The warning
+also states what those same rules can remove after `docker compose down` or
+another detach. `config survey` accepts the same `--profile` and TTL override
+flags as `config propose`, so the warning you read during discovery is the
+warning your proposal will carry. In the current policy engine, an old volume
+can become eligible as soon as it detaches because `orphan_for` still uses
+resource creation age; always inspect the new plan before applying it.
 
 Unselected and unlabeled objects remain unowned. The three profiles provide
 editable starting values:
@@ -95,8 +99,9 @@ editable starting values:
 Use the TUI, or run the same workflow headlessly:
 
 ```sh
-# Read-only discovery. Copy one or more candidate IDs.
-docker_maid config survey
+# Read-only discovery. Copy one or more candidate IDs. Pass the same policy
+# flags you will propose with so the warnings match.
+docker_maid config survey --profile workstation --volume-ttl 72h
 
 # Create a versioned review artifact. This does not write config.
 docker_maid config propose \
