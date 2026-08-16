@@ -1125,7 +1125,6 @@ fn push_managed_rule(
             common,
             stopped_ttl: Some(policy.stopped_container_ttl.clone()),
             running_ttl: None,
-            adopt: false,
         }),
         ResourceKind::Image => {
             let image_tag_patterns = match &candidate.selector {
@@ -1768,6 +1767,41 @@ mod tests {
     }
 
     #[test]
+    fn a_generated_container_rule_carries_no_adoption_key() {
+        let inventory = vec![item(
+            ResourceKind::Container,
+            "c1",
+            "project-web-1",
+            &[("com.docker.compose.project", "project")],
+        )];
+        let survey = survey_inventory(&inventory);
+        let ids = vec![survey.candidates[0].id.clone()];
+        let proposal = propose_configuration(&ProposalRequest {
+            base_source: "",
+            source_existed: false,
+            target_path: Path::new("config.toml"),
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::Workstation,
+            policy: None,
+            candidate_ids: &ids,
+            now_epoch_seconds: 10_000,
+            context: context(&observations(&inventory)),
+        })
+        .expect("proposal");
+
+        // The configurator writes a file an operator then owns, so anything it
+        // emits is a key it is teaching. It must not teach a retired one, and
+        // the source it produces must still parse under the strict schema.
+        assert!(proposal.resulting_source.contains("[[rules.containers]]"));
+        assert!(!proposal.resulting_source.contains("adopt"));
+        let reparsed = Config::parse(&proposal.resulting_source, Path::new("config.toml"))
+            .expect("generated source parses");
+        assert_eq!(reparsed.rules.containers.len(), 1);
+        assert_eq!(reparsed.rules.containers[0].common.scope, RuleScope::Owned);
+    }
+
+    #[test]
     fn proposal_is_deterministic_and_preserves_manual_source() {
         let source = "# keep this comment\n\n[[rules.networks]]\nname = \"manual\"\norphan = true\nselect.names = [\"^manual$\"]\n";
         let inventory = vec![item(
@@ -1917,6 +1951,56 @@ mod tests {
             .expect_err("source drift")
             .to_string()
             .contains("configuration changed"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn the_writer_refuses_a_proposal_carrying_a_retired_key() {
+        let root = std::env::temp_dir().join(format!(
+            "docker-maid-configurator-retired-{}-{}",
+            std::process::id(),
+            NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).expect("root");
+        let target = root.join("config.toml");
+        let inventory = vec![item(
+            ResourceKind::Container,
+            "c1",
+            "project-web-1",
+            &[("com.docker.compose.project", "project")],
+        )];
+        let survey = survey_inventory(&inventory);
+        let candidate_ids = [survey.candidates[0].id.clone()];
+        let mut proposal = propose_configuration(&ProposalRequest {
+            base_source: "",
+            source_existed: false,
+            target_path: &target,
+            survey: &survey,
+            inventory: &inventory,
+            profile: PolicyProfile::Workstation,
+            policy: None,
+            candidate_ids: &candidate_ids,
+            now_epoch_seconds: 10_000,
+            context: context(&observations(&inventory)),
+        })
+        .expect("proposal");
+
+        // A proposal written by an older build carries that build's generated
+        // source. Its hashes and inventory signature are still valid, so the
+        // strict schema is the only gate left before the bytes reach an
+        // operator's file. Stand in for that build by injecting the key it
+        // used to emit and restamping the payload hash it would have carried.
+        proposal.resulting_source = proposal.resulting_source.replace(
+            "stopped_ttl = \"2h\"",
+            "stopped_ttl = \"2h\"\nadopt = false",
+        );
+        proposal.result_source_hash = stable_config_hash(&proposal.resulting_source);
+
+        let error = write_proposal(&proposal, &inventory).expect_err("retired key must be refused");
+        let message = error.to_string();
+        assert!(message.contains("unknown field `adopt`"));
+        assert!(message.contains("retired key `adopt`:"));
+        assert!(!target.exists(), "refused proposal must write nothing");
         fs::remove_dir_all(root).expect("cleanup");
     }
 

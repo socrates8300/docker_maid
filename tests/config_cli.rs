@@ -1,3 +1,4 @@
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -172,6 +173,94 @@ fn print_emits_normalized_valid_toml() {
         &root,
     );
     assert!(rechecked.status.success());
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn a_retired_adopt_key_is_refused_and_names_its_migration() {
+    let root = temp_dir("retired-adopt");
+    let path = root.join("legacy.toml");
+    fs::write(
+        &path,
+        "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\nadopt = true\n",
+    )
+    .expect("write legacy config");
+
+    let output = run(
+        &[
+            "config",
+            "check",
+            "--config",
+            path.to_str().expect("utf-8 path"),
+        ],
+        &root,
+    );
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown field `adopt`"));
+    // Rule tables flatten their common fields, so serde cannot list the keys
+    // it expected instead. Without the retirement note the operator is told
+    // only that a key is unknown, on the line of the table header.
+    assert!(stderr.contains("retired key `adopt`:"));
+    assert!(stderr.contains("Delete the line"));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn no_configuration_surface_emits_the_retired_adopt_key() {
+    let root = temp_dir("retired-key-absent");
+    let path = root.join("docker_maid.toml");
+    fs::write(
+        &path,
+        "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\n",
+    )
+    .expect("write config");
+
+    // The human surfaces: the starter operators are told to copy, and the
+    // normalized round-trip that rewrites a rule back out.
+    for args in [&["config", "default"][..], &["config", "print"][..]] {
+        let output = run(args, &root);
+        assert!(
+            output.status.success(),
+            "command: {args:?}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !stdout.contains("adopt"),
+            "command {args:?} emitted: {stdout}"
+        );
+    }
+
+    // The machine surfaces. Only the configuration subtree is inspected: the
+    // envelope carries the file path, which the test directory name would
+    // otherwise satisfy by accident.
+    for args in [
+        &["--json", "config", "print"][..],
+        &["--json", "config", "check"][..],
+    ] {
+        let output = run(args, &root);
+        assert!(
+            output.status.success(),
+            "command: {args:?}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: Value = serde_json::from_str(
+            &String::from_utf8(output.stdout).expect("utf-8 machine document"),
+        )
+        .expect("valid JSON document");
+        let configuration = document
+            .get("configuration")
+            .expect("machine document carries a configuration")
+            .to_string();
+        assert!(
+            !configuration.contains("adopt"),
+            "command {args:?} emitted: {configuration}"
+        );
+    }
 
     fs::remove_dir_all(root).expect("remove test directory");
 }

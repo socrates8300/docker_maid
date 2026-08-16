@@ -55,6 +55,33 @@ pub const DEFAULT_CONFIG: &str = r#"# docker_maid configuration
 # mouse = false
 "#;
 
+/// Configuration keys this build has retired, each with its migration.
+///
+/// A retired key is not a typo. An older file may carry it, and the strict
+/// schema rejects it as unknown like any other stray key. Naming the
+/// retirement turns that generic failure into an instruction the operator can
+/// act on without reading a changelog.
+const RETIRED_KEYS: &[(&str, &str)] = &[(
+    "adopt",
+    "this was a container rule key; a rule match already means the resource \
+     is owned, so it never changed a decision. Delete the line",
+)];
+
+/// Return the retired key a parse failure names, with its migration note.
+///
+/// The match is on the exact "unknown field" phrase serde emits for that key,
+/// so a near-miss typo such as `adpot` keeps the plain unknown-field message
+/// instead of borrowing guidance meant for a real retirement. The key is
+/// matched wherever it appears, and the note says which table it came from,
+/// so the guidance stays true even for a file that put it under the wrong one.
+fn retired_key_hint(source: &toml::de::Error) -> Option<(&'static str, &'static str)> {
+    let message = source.to_string();
+    RETIRED_KEYS
+        .iter()
+        .find(|(key, _)| message.contains(&format!("unknown field `{key}`")))
+        .copied()
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     NotFound {
@@ -87,9 +114,12 @@ impl fmt::Display for ConfigError {
                 write!(formatter, "cannot read {}: {source}", path.display())
             }
             Self::Parse { path, source } => {
+                let hint = retired_key_hint(source).map_or_else(String::new, |(key, hint)| {
+                    format!("\nretired key `{key}`: {hint}")
+                });
                 write!(
                     formatter,
-                    "invalid configuration {}: {source}",
+                    "invalid configuration {}: {source}{hint}",
                     path.display()
                 )
             }
@@ -361,6 +391,10 @@ impl Selectors {
     }
 }
 
+/// A container rule.
+///
+/// A rule match is itself the ownership statement, so there is no key that
+/// turns adoption on: matching a selector already makes the resource owned.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ContainerRule {
@@ -370,7 +404,6 @@ pub struct ContainerRule {
     pub stopped_ttl: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub running_ttl: Option<String>,
-    pub adopt: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -652,7 +685,65 @@ mod tests {
         let source =
             "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\nadpot = true\n";
         let error = Config::parse(source, Path::new("bad.toml")).expect_err("must reject typo");
-        assert!(error.to_string().contains("unknown field `adpot`"));
+        let message = error.to_string();
+        assert!(message.contains("unknown field `adpot`"));
+        // A typo is not a retirement. Rule structs flatten their common
+        // fields, so serde cannot list the expected keys here; borrowing a
+        // retired key's migration note would point the operator at the wrong
+        // fix for a one-letter slip.
+        assert!(!message.contains("retired key"));
+    }
+
+    #[test]
+    fn the_retired_adopt_key_is_refused_and_names_its_migration() {
+        let source =
+            "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\nadopt = true\n";
+        let error =
+            Config::parse(source, Path::new("legacy.toml")).expect_err("must reject retired key");
+        let message = error.to_string();
+        assert!(message.contains("unknown field `adopt`"));
+        assert!(message.contains("retired key `adopt`:"));
+        assert!(message.contains("a rule match already means the resource is owned"));
+        assert!(message.contains("Delete the line"));
+    }
+
+    #[test]
+    fn a_retired_key_under_the_wrong_table_still_reads_truthfully() {
+        let error = Config::parse("[defaults]\nadopt = true\n", Path::new("legacy.toml"))
+            .expect_err("must reject retired key");
+        let message = error.to_string();
+        // A retired key is matched by name wherever it appears, so the note
+        // has to say which table it belonged to instead of assuming the file
+        // put it there. The migration is the same either way.
+        assert!(message.contains("retired key `adopt`:"));
+        assert!(message.contains("this was a container rule key"));
+    }
+
+    #[test]
+    fn a_container_rule_serializes_without_any_adoption_key() {
+        let source = "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\n";
+        let config = Config::parse(source, Path::new("ok.toml")).expect("parse config");
+        let normalized = config.to_normalized_toml().expect("serialize config");
+        // The schema must not re-offer the key it just retired, in either
+        // direction: it is neither written out nor accepted back.
+        assert!(!normalized.contains("adopt"));
+        Config::parse(&normalized, Path::new("normalized.toml")).expect("reparse normalized");
+    }
+
+    #[test]
+    fn removing_the_retired_key_leaves_the_rule_identical() {
+        let with_key = "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\nadopt = true\n";
+        let without_key =
+            "[[rules.containers]]\nname = \"agents\"\nstopped_ttl = \"2h\"\nselect.names = [\"^agent-\"]\n";
+        Config::parse(with_key, Path::new("legacy.toml")).expect_err("retired key is refused");
+        let migrated = Config::parse(without_key, Path::new("migrated.toml")).expect("parse rule");
+        // The migration the error asks for is exactly "delete the line", so
+        // the surviving rule must still carry every selector and floor.
+        let rule = &migrated.rules.containers[0];
+        assert_eq!(rule.common.name, "agents");
+        assert_eq!(rule.common.scope, RuleScope::Owned);
+        assert_eq!(rule.stopped_ttl.as_deref(), Some("2h"));
+        assert_eq!(rule.common.select.names, vec!["^agent-".to_owned()]);
     }
 
     #[test]

@@ -151,6 +151,13 @@ never an empty protected set.
 
 `config default`, `config check`, and `config print` return `command`, `path`, and the parsed `configuration` object. `path` is `null` for the built-in default.
 
+A container rule carries no adoption key. A rule match is itself the ownership
+statement, so every selected resource is `owned`, and there is no third state
+between owned and unowned. `scope = "all"` with `allow_unscoped = true` remains
+the only route to `authorized-unscoped`. A configuration that still sets the
+retired `adopt` key is refused at parse time with exit `3`; the error names the
+retired key and the migration, which is to delete the line.
+
 Volume, image, and network age floors measure continuous observed-unreferenced
 time from `$XDG_STATE_HOME/docker_maid/observation.toml`, which every policy
 pass (`plan`, `clean`, `daemon`, `status`, and the TUI) updates under an

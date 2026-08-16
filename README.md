@@ -341,8 +341,16 @@ name = "agent-sandboxes"
 description = "Reap stopped coding-agent containers"
 select.labels = ["ai-agent.*", "devcontainer.local_folder=*"]
 stopped_ttl = "2h"
-adopt = true
 ```
+
+A rule match is the adoption. Any resource a rule selects is `owned`, so
+there is no key that switches adoption on and no third ownership state
+between owned and unowned. `scope = "all"` with `allow_unscoped = true`
+remains the one loud escape hatch for unowned objects.
+
+An older file that still carries `adopt` is refused by the strict schema.
+The error names the retired key and tells you to delete the line; removing it
+changes no decision.
 
 Human-authored protection rules remain in the configuration file. Runtime
 protection entries and activity history are stored separately under
