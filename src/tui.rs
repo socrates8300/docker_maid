@@ -444,8 +444,10 @@ impl App {
 
     fn accept_policy_value(&mut self) -> Result<(), RunError> {
         let field = PolicyField::ALL[self.policy_field];
-        set_policy_field(field, &mut self.configure_policy, self.prefix_input.trim())?;
-        self.configure_policy.validate()?;
+        let mut next_policy = self.configure_policy.clone();
+        set_policy_field(field, &mut next_policy, self.prefix_input.trim())?;
+        next_policy.validate()?;
+        self.configure_policy = next_policy;
         self.config_proposal = None;
         self.editor = Editor::None;
         self.status = format!(
@@ -821,12 +823,15 @@ async fn handle_event(
     if key.kind != crossterm::event::KeyEventKind::Press {
         return Ok(false);
     }
+    if is_global_quit(key) {
+        return Ok(true);
+    }
     if app.editor == Editor::Prefix {
         handle_prefix_key(app, key)?;
         return Ok(false);
     }
     if app.editor == Editor::Policy {
-        handle_policy_key(app, key)?;
+        handle_policy_key(app, key);
         return Ok(false);
     }
     if app.editor == Editor::Filter {
@@ -840,9 +845,6 @@ async fn handle_event(
 }
 
 async fn handle_main_key(app: &mut App, key: KeyEvent) -> Result<bool, RunError> {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        return Ok(true);
-    }
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Char('?') => app.overlay = Overlay::Help,
@@ -1054,14 +1056,21 @@ fn handle_prefix_key(app: &mut App, key: KeyEvent) -> Result<(), RunError> {
     Ok(())
 }
 
-fn handle_policy_key(app: &mut App, key: KeyEvent) -> Result<(), RunError> {
+fn handle_policy_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.editor = Editor::None;
             app.prefix_input.clear();
             replace_status(&mut app.status, "Policy edit cancelled");
         }
-        KeyCode::Enter => app.accept_policy_value()?,
+        KeyCode::Enter => {
+            if let Err(error) = app.accept_policy_value() {
+                app.status = format!(
+                    "Invalid value: {} • correct it or press Esc",
+                    super::run_error_message(&error)
+                );
+            }
+        }
         KeyCode::Backspace => {
             app.prefix_input.pop();
         }
@@ -1072,7 +1081,10 @@ fn handle_policy_key(app: &mut App, key: KeyEvent) -> Result<(), RunError> {
         }
         _ => {}
     }
-    Ok(())
+}
+
+fn is_global_quit(key: KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c' | 'C'))
 }
 
 fn open_confirmation(app: &mut App) {
@@ -1123,6 +1135,11 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
         View::Configure => render_configure(frame, app, areas[2]),
     }
     render_footer(frame, app, areas[3]);
+
+    if app.editor != Editor::None {
+        render_editor(frame, app);
+        return;
+    }
 
     match app.overlay {
         Overlay::None => {}
@@ -1763,14 +1780,89 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         app.status.clone()
     };
-    let line = Line::from(vec![
-        Span::styled(
-            " ↑↓/jk move · 1–5 views · c prefix · p protect · h/l profile · [/] field · e edit · v preview · s save · a apply · q quit ",
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-        ),
-        Span::raw(format!("  {status}")),
-    ]);
+    let line = if app.editor == Editor::None {
+        Line::from(vec![
+            Span::styled(
+                " ↑↓/jk move · 1–5 views · c prefix · p protect · h/l profile · [/] field · e edit · v preview · s save · a apply · q quit ",
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ),
+            Span::raw(format!("  {status}")),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(
+                " Enter save · Esc cancel · Ctrl-C quit ",
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ),
+            Span::raw(format!("  {status}")),
+        ])
+    };
     frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_editor(frame: &mut Frame<'_>, app: &App) {
+    let (title, label, guidance) = match app.editor {
+        Editor::Policy => (
+            "Edit policy value",
+            PolicyField::ALL[app.policy_field].title(),
+            "Durations: 15m, 2h, 7d • cache bytes: 10GiB",
+        ),
+        Editor::Prefix => (
+            "Add explicit name prefix",
+            "prefix",
+            "Only matching names become owned by this rule",
+        ),
+        Editor::Filter => (
+            "Filter inventory",
+            "filter",
+            "Matching is case-insensitive and fuzzy",
+        ),
+        Editor::None => return,
+    };
+    let area = centered_rect(76, 34, frame.area());
+    let input_width = usize::from(area.width.saturating_sub(8)).max(1);
+    let input = visible_input_tail(&app.prefix_input, input_width);
+    let message = if app.status.starts_with("Invalid value:") {
+        app.status.as_str()
+    } else {
+        guidance
+    };
+    let text = Text::from(vec![
+        Line::from(format!("{label}:")),
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled(input, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("▌", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(message),
+        Line::from("Enter save • Esc cancel • Ctrl-C quit"),
+    ]);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn visible_input_tail(value: &str, max_chars: usize) -> String {
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.to_owned();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let tail = value
+        .chars()
+        .skip(count.saturating_sub(keep))
+        .collect::<String>();
+    format!("…{tail}")
 }
 
 fn render_help(frame: &mut Frame<'_>) {
@@ -2529,6 +2621,83 @@ mod tests {
             .draw(|frame| render(frame, &mut app))
             .expect("render help");
         assert!(rendered_text(&terminal).contains("keyboard help"));
+    }
+
+    #[test]
+    fn policy_editor_is_visible_in_an_eighty_column_terminal() {
+        let root =
+            std::env::temp_dir().join(format!("docker-maid-tui-editor-{}", std::process::id()));
+        let paths = StatePaths::new(root);
+        let plan = Plan {
+            decisions: vec![sample_decision()],
+        };
+        let survey = survey_inventory(
+            &plan
+                .decisions
+                .iter()
+                .map(|decision| decision.resource.clone())
+                .collect::<Vec<_>>(),
+        );
+        let mut app = App {
+            explicit_config: None,
+            loaded: LoadedConfig {
+                path: PathBuf::from("docker_maid.toml"),
+                config: Config::default(),
+                source: "# test config".to_owned(),
+            },
+            built_in_config: true,
+            state_paths: paths.clone(),
+            protection_store: ProtectionStore::new(paths),
+            plan,
+            plan_id: "test-plan".to_owned(),
+            plan_created_at: 1,
+            config_hash: "test-config".to_owned(),
+            plan_validity: PlanValidity::Valid,
+            history: Vec::new(),
+            view: View::Configure,
+            inventory_kind: ResourceKind::Container,
+            selected: 0,
+            filter: String::new(),
+            editor: Editor::None,
+            detail_focused: false,
+            overlay: Overlay::None,
+            confirm_scroll: 0,
+            activity_scroll: 0,
+            rules_scroll: 0,
+            survey,
+            configure_selected: BTreeSet::new(),
+            configure_row: 0,
+            configure_profile: PolicyProfile::Workstation,
+            configure_policy: PolicyProfile::Workstation.settings(),
+            policy_field: 0,
+            config_proposal: None,
+            prefix_input: String::new(),
+            status: "ready".to_owned(),
+        };
+        app.start_policy_editor();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render editor");
+        let rendered = rendered_text(&terminal);
+
+        assert!(rendered.contains("Edit policy value"));
+        assert!(rendered.contains("2h"));
+        assert!(rendered.contains("Enter save"));
+        assert!(rendered.contains("Esc cancel"));
+
+        assert!(is_global_quit(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+
+        app.prefix_input = "not-a-duration".to_owned();
+        handle_policy_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.editor, Editor::Policy);
+        assert_eq!(app.configure_policy.stopped_container_ttl, "2h");
+        assert!(app.status.starts_with("Invalid value:"));
     }
 
     fn rendered_text(terminal: &Terminal<TestBackend>) -> String {
