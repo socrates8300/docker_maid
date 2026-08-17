@@ -11,7 +11,7 @@ pub const DEFAULT_CONFIG: &str = r#"# docker_maid configuration
 # Run `docker_maid tui` for daemon-backed discovery and a reviewed proposal.
 
 # [defaults]
-# interval = "5m"       # daemon cadence
+# interval = "5m"       # quiet-host backstop; Docker events also wake a pass
 # log_level = "info"
 
 # [protect]

@@ -213,13 +213,20 @@ pub fn daemon_pass_started_event(
     trigger: &str,
     applied: bool,
     timestamp: i64,
+    coalesced_events: Option<u64>,
+    reconnects: Option<u64>,
 ) -> Value {
     let mode = if applied { "apply" } else { "dry-run" };
-    daemon_event(
-        "pass_started",
-        timestamp,
-        json!({"pass_number": pass_number, "trigger": trigger, "mode": mode}),
-    )
+    let mut fields = json!({"pass_number": pass_number, "trigger": trigger, "mode": mode});
+    if let Some(object) = fields.as_object_mut() {
+        if let Some(count) = coalesced_events {
+            object.insert("coalesced_events".to_owned(), json!(count));
+        }
+        if let Some(count) = reconnects {
+            object.insert("reconnects".to_owned(), json!(count));
+        }
+    }
+    daemon_event("pass_started", timestamp, fields)
 }
 
 #[must_use]

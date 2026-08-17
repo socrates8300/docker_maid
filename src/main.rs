@@ -16,6 +16,9 @@ use docker_maid::plan::{build_plan_with_context, Action, Disposition, Plan, Plan
 use docker_maid::spawn::{spawn_sandbox, SpawnError, SpawnOutcome, SpawnRequest};
 use docker_maid::stamp::Stamp;
 use docker_maid::state::{ProtectionKind, ProtectionState, ProtectionStore, StatePaths};
+use docker_maid::wakeup::{
+    next_wake, spawn_docker_event_listener, DaemonWake, EventInbox, DEFAULT_EVENT_DEBOUNCE,
+};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::fs;
@@ -87,7 +90,8 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Continuously run policy-derived cleanup passes on an interval.
+    /// Continuously run policy-derived cleanup passes. Docker events wake a
+    /// debounced pass; the interval is the backstop when Docker is quiet.
     Daemon {
         /// Apply each generated plan without prompting.
         #[arg(long)]
@@ -1186,11 +1190,15 @@ async fn run_daemon(
         None => daemon_interval(&initial.config, None)?,
     };
     let mut signals = DaemonSignals::new()?;
+    let events = EventInbox::new();
+    let listener = spawn_docker_event_listener(events.clone());
     announce_daemon_start(format, apply, interval)?;
     let mut trigger = "startup";
+    let mut coalesced_events = None;
+    let mut reconnects = None;
     let mut pass_number = 0u64;
 
-    loop {
+    let outcome = loop {
         pass_number = pass_number.saturating_add(1);
         if format == OutputFormat::Json {
             write_json_payload(&machine::daemon_pass_started_event(
@@ -1198,6 +1206,8 @@ async fn run_daemon(
                 trigger,
                 apply,
                 epoch_seconds()?,
+                coalesced_events,
+                reconnects,
             ))?;
         }
         match run_daemon_pass(
@@ -1211,22 +1221,41 @@ async fn run_daemon(
         .await
         {
             Ok(next_interval) => interval = next_interval,
-            Err(error @ RunError::Output(_)) => return Err(error),
+            Err(error @ RunError::Output(_)) => {
+                listener.abort();
+                return Err(error);
+            }
             Err(error) => announce_daemon_pass_failure(format, pass_number, &error)?,
         }
 
-        match signals.wait(interval).await {
-            DaemonWake::Interval => trigger = "interval",
+        match next_wake(&events, interval, DEFAULT_EVENT_DEBOUNCE, signals.recv()).await {
+            DaemonWake::Interval => {
+                trigger = "interval";
+                coalesced_events = None;
+                reconnects = None;
+            }
+            DaemonWake::Event {
+                events: event_count,
+                reconnects: reconnect_count,
+            } => {
+                trigger = "event";
+                coalesced_events = (event_count > 0).then_some(event_count);
+                reconnects = (reconnect_count > 0).then_some(reconnect_count);
+            }
             DaemonWake::Reload => {
                 announce_daemon_reload(format)?;
                 trigger = "SIGHUP";
+                coalesced_events = None;
+                reconnects = None;
             }
             DaemonWake::Terminate => {
                 announce_daemon_stop(format)?;
-                return Ok(RunOutcome::Success);
+                break RunOutcome::Success;
             }
         }
-    }
+    };
+    listener.abort();
+    Ok(outcome)
 }
 
 fn announce_daemon_start(
@@ -1242,6 +1271,7 @@ fn announce_daemon_start(
             serde_json::json!({
                 "mode": mode,
                 "interval_seconds": interval.as_secs_f64(),
+                "event_debounce_seconds": DEFAULT_EVENT_DEBOUNCE.as_secs_f64(),
             }),
         ))?;
     } else {
@@ -1404,13 +1434,6 @@ fn run_error_classification(error: &RunError) -> (u8, &'static str) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DaemonWake {
-    Interval,
-    Reload,
-    Terminate,
-}
-
 #[cfg(unix)]
 struct DaemonSignals {
     reload: tokio::signal::unix::Signal,
@@ -1436,12 +1459,11 @@ impl DaemonSignals {
         })
     }
 
-    async fn wait(&mut self, interval: Duration) -> DaemonWake {
+    async fn recv(&mut self) -> DaemonWake {
         tokio::select! {
             _ = self.reload.recv() => DaemonWake::Reload,
             _ = self.terminate.recv() => DaemonWake::Terminate,
             _ = self.interrupt.recv() => DaemonWake::Terminate,
-            () = tokio::time::sleep(interval) => DaemonWake::Interval,
         }
     }
 }
@@ -1457,7 +1479,7 @@ impl DaemonSignals {
         ))
     }
 
-    async fn wait(&mut self, _interval: Duration) -> DaemonWake {
+    async fn recv(&mut self) -> DaemonWake {
         unreachable!("daemon construction fails on non-Unix platforms")
     }
 }

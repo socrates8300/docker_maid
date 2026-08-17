@@ -339,7 +339,7 @@ is `state_io` with exit `6`.
 | Event | Purpose |
 |---|---|
 | `daemon_started` | Process mode and interval |
-| `pass_started` | Pass number, trigger, and mode |
+| `pass_started` | Pass number, trigger (`startup`, `interval`, `SIGHUP`, `event`), and mode. An `event` trigger may also carry `coalesced_events` and `reconnects`. |
 | `plan` | Complete inventory and policy result for one pass |
 | `action` | One applied target outcome |
 | `pass_summary` | Pending and execution totals |
@@ -347,6 +347,8 @@ is `state_io` with exit `6`.
 | `configuration_reload_requested` | SIGHUP requested a reload |
 | `daemon_stopped` | Graceful SIGTERM or SIGINT completion |
 
-Every event contains `schema_version`, `event`, and Unix `timestamp`. Pass events also contain `pass_number`. A recoverable `pass_error` embeds the same `kind`, `message`, and `details` fields as a fatal error, but remains on the daemon stdout stream because the process continues.
+Every event contains `schema_version`, `event`, and Unix `timestamp`. Pass events also contain `pass_number`. `daemon_started` includes `event_debounce_seconds`. A recoverable `pass_error` embeds the same `kind`, `message`, and `details` fields as a fatal error, but remains on the daemon stdout stream because the process continues.
+
+A Docker event never deletes a resource. It only sets `trigger` to `event` on the next `pass_started`. The planner, protection lock, and `--apply` authorization are unchanged.
 
 Consumers must parse each line independently. They must ignore unknown fields to remain compatible with additive schema changes.

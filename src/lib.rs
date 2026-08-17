@@ -13,3 +13,4 @@ pub mod plan;
 pub mod spawn;
 pub mod stamp;
 pub mod state;
+pub mod wakeup;

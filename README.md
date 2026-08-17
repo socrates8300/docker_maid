@@ -274,10 +274,14 @@ Protection or activity state failures stop the command with exit code `6`.
 
 ## Available now: daemon execution
 
-`daemon` runs a pass immediately, then waits for the configured interval. It is
-a read-only monitor unless `--apply` is explicit. Every pass reloads the full
-configuration and protection state. Docker, configuration, or state failures
-are reported and retried at the next interval without busy-looping.
+`daemon` runs a pass immediately, then waits. Docker events wake one debounced
+planner pass after 500ms of quiet; a burst is one wake, not one pass per event.
+The configured interval is the backstop when Docker is quiet or events never
+stop. It is a read-only monitor unless `--apply` is explicit. Every pass
+reloads the full configuration and protection state and uses the same plan,
+protection lock, and delete-time revalidation as `clean`. Events have no delete
+path. Docker, configuration, or state failures are reported and retried at the
+next interval without busy-looping.
 
 ```sh
 # Monitor every five minutes without mutation.

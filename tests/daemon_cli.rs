@@ -2,6 +2,7 @@ use bollard::models::NetworkCreateRequest;
 use bollard::Docker;
 use docker_maid::activity::ActivityJournal;
 use docker_maid::state::StatePaths;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -408,4 +409,199 @@ async fn live_daemon_is_read_only_without_apply() {
             .count()
             >= 1
     );
+}
+
+fn parse_ndjson(path: &Path) -> Vec<Value> {
+    fs::read_to_string(path).map_or_else(
+        |_| Vec::new(),
+        |source| {
+            source
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_str(line).expect("valid daemon NDJSON"))
+                .collect()
+        },
+    )
+}
+
+fn event_trigger_passes(events: &[Value]) -> Vec<&Value> {
+    events
+        .iter()
+        .filter(|event| event["event"] == "pass_started" && event["trigger"] == "event")
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn live_docker_event_burst_wakes_one_dry_run_pass() {
+    if !live_test_enabled() {
+        return;
+    }
+
+    let docker = Docker::connect_with_defaults().expect("connect to live Docker");
+    let root = temp_dir("event-burst");
+    let unique = root.file_name().expect("temporary name").to_string_lossy();
+    let label = format!("{unique}-label");
+    let networks = (0..5)
+        .map(|index| format!("{unique}-burst-{index}"))
+        .collect::<Vec<_>>();
+    let config = root.join("daemon.toml");
+    let stdout_path = root.join("daemon.ndjson");
+    let stdout = fs::File::create(&stdout_path).expect("create NDJSON capture");
+
+    fs::write(&config, live_config(&label, None)).expect("write burst config");
+    let child = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 burst config path"),
+            "--format",
+            "json",
+            "daemon",
+            "--interval",
+            "30s",
+        ])
+        .env("XDG_STATE_HOME", root.join("state"))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn event-burst daemon");
+
+    wait_until(Duration::from_secs(5), || {
+        parse_ndjson(&stdout_path)
+            .iter()
+            .any(|event| event["event"] == "pass_summary")
+    })
+    .await;
+
+    for name in &networks {
+        create_network(&docker, name, &label).await;
+    }
+    wait_until(Duration::from_secs(3), || {
+        !event_trigger_passes(&parse_ndjson(&stdout_path)).is_empty()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    send_signal(&child, "TERM");
+    let output = child.wait_with_output().expect("wait for burst daemon");
+    let events = parse_ndjson(&stdout_path);
+    let event_passes = event_trigger_passes(&events);
+    let all_survived = {
+        let mut survived = true;
+        for name in &networks {
+            survived &= docker.inspect_network(name, None).await.is_ok();
+        }
+        survived
+    };
+
+    for name in &networks {
+        let _ = docker.remove_network(name).await;
+    }
+    fs::remove_dir_all(root).expect("remove burst daemon directory");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        event_passes.len(),
+        1,
+        "burst must coalesce to one planner pass: {events:#?}"
+    );
+    let coalesced = event_passes[0]["coalesced_events"].as_u64().unwrap_or(0);
+    assert!(
+        coalesced >= 5,
+        "expected at least one Docker event per create, got {coalesced}: {events:#?}"
+    );
+    assert!(all_survived, "dry-run event wake deleted a network");
+    assert!(events.iter().all(|event| event["event"] != "action"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn live_event_woken_apply_deletes_only_through_the_planner() {
+    if !live_test_enabled() {
+        return;
+    }
+
+    let docker = Docker::connect_with_defaults().expect("connect to live Docker");
+    let root = temp_dir("event-apply");
+    let unique = root.file_name().expect("temporary name").to_string_lossy();
+    let label = format!("{unique}-label");
+    let target = format!("{unique}-target");
+    let poke = format!("{unique}-poke");
+    let config = root.join("daemon.toml");
+    let stdout_path = root.join("daemon.ndjson");
+    let stdout = fs::File::create(&stdout_path).expect("create NDJSON capture");
+
+    fs::write(&config, live_config(&label, None)).expect("write apply-event config");
+    let child = Command::new(binary())
+        .args([
+            "--config",
+            config.to_str().expect("UTF-8 apply-event config path"),
+            "--format",
+            "json",
+            "daemon",
+            "--apply",
+            "--interval",
+            "30s",
+        ])
+        .env("XDG_STATE_HOME", root.join("state"))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn event-apply daemon");
+
+    wait_until(Duration::from_secs(5), || {
+        parse_ndjson(&stdout_path)
+            .iter()
+            .any(|event| event["event"] == "pass_summary")
+    })
+    .await;
+
+    create_network(&docker, &target, &label).await;
+    wait_until(Duration::from_secs(3), || {
+        event_trigger_passes(&parse_ndjson(&stdout_path)).len() == 1
+    })
+    .await;
+    assert!(
+        docker.inspect_network(&target, None).await.is_ok(),
+        "first observation of an orphan must not delete it"
+    );
+
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    create_network(&docker, &poke, "unrelated").await;
+    wait_for_network_removal(&docker, &target, Duration::from_secs(5)).await;
+
+    send_signal(&child, "TERM");
+    let output = child
+        .wait_with_output()
+        .expect("wait for apply-event daemon");
+    let events = parse_ndjson(&stdout_path);
+    let event_passes = event_trigger_passes(&events);
+    let poke_survived = docker.inspect_network(&poke, None).await.is_ok();
+
+    let _ = docker.remove_network(&target).await;
+    let _ = docker.remove_network(&poke).await;
+    fs::remove_dir_all(root).expect("remove apply-event daemon directory");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        event_passes.len() >= 2,
+        "clock start and reap must both be event-triggered: {events:#?}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["event"] == "action"
+                && event["resource_name"] == target
+                && event["result"] == "removed"
+        }),
+        "expected a planner action for {target}: {events:#?}"
+    );
+    assert!(poke_survived, "unrelated poke network was deleted");
 }
