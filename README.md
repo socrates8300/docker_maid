@@ -356,6 +356,28 @@ Human-authored protection rules remain in the configuration file. Runtime
 protection entries and activity history are stored separately under
 `$XDG_STATE_HOME/docker_maid/` with locked, durable writes.
 
+### Canonical ownership labels
+
+`docker_maid labels` prints every Docker label key this build treats as
+ownership evidence, with who writes it and why it counts:
+
+```
+docker_maid labels
+docker_maid --json labels
+```
+
+The command needs no Docker daemon and no configuration. It is the single
+source of that list: the ownership survey, the family lookup behind the TUI
+protect action, and this command all read one table, so a key cannot be
+advertised here while the policy engine ignores it.
+
+A resource carrying one of these keys is evidence `config survey` can offer to
+adopt. Any other key is ignored. Keys shown with a trailing `*` are namespaces,
+matched by prefix, and that is how you write them in a selector.
+
+An agent that stamps one of these keys on what it creates becomes discoverable
+without any further configuration.
+
 Build-cache records do not expose ownership metadata. Configure their explicit
 escape hatch in bytes and durations:
 

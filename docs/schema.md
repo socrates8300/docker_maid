@@ -199,6 +199,36 @@ path, optional backup path, and result hash. A changed source or Docker
 inventory rejects the write with exit `3`. Configurator documents use
 `schema_version: 1`; fields are additive-only.
 
+## Label vocabulary document
+
+`labels --format json` returns the canonical ownership label keys:
+
+```json
+{
+  "schema_version": 1,
+  "command": "labels",
+  "keys": [
+    {
+      "key": "com.docker.compose.project",
+      "match": "exact",
+      "role": "family",
+      "writer": "Docker Compose",
+      "purpose": "Groups every resource Compose created for one project"
+    }
+  ]
+}
+```
+
+`match` is `exact` or `prefix`. A `prefix` key is a namespace and always ends
+at a dot, so `ai-agent.` matches `ai-agent.owner` but never `ai-agentx.owner`.
+`role` is `family`, meaning the key and its value together name an ownership
+family. The order of `keys` is most specific first, and the first entry a key
+matches is the one that describes it.
+
+This document and the ownership survey read one table, so a key listed here is
+exactly a key `config survey` can offer to adopt. The command reads no
+configuration and needs no Docker daemon.
+
 `--version --format json` returns `command: "version"` and `version`.
 
 ## Daemon NDJSON

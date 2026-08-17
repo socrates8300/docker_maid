@@ -8,6 +8,7 @@ use docker_maid::configurator::{
 };
 use docker_maid::executor::{execute_plan, ExecutionReport};
 use docker_maid::inventory::{collect_inventory, collect_inventory_for_configuration};
+use docker_maid::labels;
 use docker_maid::machine;
 use docker_maid::observation::{ObservationState, ObservationStore};
 use docker_maid::plan::{build_plan_with_context, Action, Disposition, Plan, PlanContext};
@@ -116,6 +117,12 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Print the canonical Docker label keys this build treats as ownership.
+    ///
+    /// These are the keys the ownership survey reads, so an agent that stamps
+    /// one of them is discoverable by `config survey` without any further
+    /// configuration.
+    Labels,
 }
 
 #[derive(Debug, Subcommand)]
@@ -398,7 +405,47 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
         Command::Config { command } => {
             run_config_command(cli.config.as_deref(), command, format).await
         }
+        Command::Labels => {
+            if format == OutputFormat::Json {
+                write_json_payload(&machine::labels_document())?;
+            } else {
+                write_payload(render_labels().as_bytes())?;
+            }
+            Ok(RunOutcome::Success)
+        }
     }
+}
+
+/// Render the canonical label vocabulary as an aligned table.
+///
+/// The rows come from the same table the policy engine reads, so this output
+/// cannot drift from what the ownership survey actually recognises. A prefix
+/// row is shown with a trailing `*` because that is how an operator writes it
+/// in a selector.
+fn render_labels() -> String {
+    let display_key = |entry: &labels::LabelKey| match entry.matching {
+        labels::Match::Prefix => format!("{}*", entry.key),
+        labels::Match::Exact => entry.key.to_owned(),
+    };
+    let width = labels::VOCABULARY
+        .iter()
+        .map(|entry| display_key(entry).len())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("Canonical ownership label keys\n\n");
+    for entry in labels::VOCABULARY {
+        let key = display_key(entry);
+        let _ = write!(
+            out,
+            "{key:<width$}  {}\n{:<width$}  written by {}\n",
+            entry.purpose, "", entry.writer
+        );
+    }
+    out.push_str(
+        "\nA resource carrying one of these keys is ownership evidence that\n\
+         `config survey` can offer to adopt. Any other key is ignored.\n",
+    );
+    out
 }
 
 async fn run_config_command(

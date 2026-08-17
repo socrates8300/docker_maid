@@ -3,6 +3,7 @@
 use crate::activity::{CompletedPass, EventData};
 use crate::config::Config;
 use crate::executor::{ExecutionReport, TargetStatus};
+use crate::labels;
 use crate::plan::Plan;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,6 +71,32 @@ pub fn config_document(command: &str, path: Option<&str>, config: &Config) -> Va
         "command": command,
         "path": path,
         "configuration": config,
+    })
+}
+
+/// Render the canonical label vocabulary as a machine document.
+///
+/// The entries come straight from [`labels::VOCABULARY`], so a consumer that
+/// reads this document and the policy engine that adopts resources can never
+/// disagree about which keys are ownership evidence.
+#[must_use]
+pub fn labels_document() -> Value {
+    let keys = labels::VOCABULARY
+        .iter()
+        .map(|entry| {
+            json!({
+                "key": entry.key,
+                "match": entry.matching.to_string(),
+                "role": entry.role.to_string(),
+                "writer": entry.writer,
+                "purpose": entry.purpose,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "command": "labels",
+        "keys": keys,
     })
 }
 

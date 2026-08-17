@@ -5,6 +5,7 @@ use crate::config::{
     BuildCacheRule, CommonRule, Config, ConfigError, ContainerRule, ImageRule, NetworkRule,
     RuleScope, Rules, Selectors, VolumeRule,
 };
+use crate::labels;
 use crate::plan::{
     build_plan_with_context, Action, InventoryItem, PlanContext, ResourceKind, ResourceState,
 };
@@ -360,7 +361,7 @@ pub fn survey_inventory(inventory: &[InventoryItem]) -> ConfiguratorSurvey {
     let mut groups = BTreeMap::<String, CandidateAccumulator>::new();
     for item in inventory {
         for (key, value) in &item.labels {
-            if key == "com.docker.compose.project" && !value.trim().is_empty() {
+            if labels::is_compose_project(key) && !value.trim().is_empty() {
                 let identity = format!("{key}={value}");
                 add_candidate_resource(
                     &mut groups,
@@ -424,7 +425,7 @@ pub fn survey_inventory(inventory: &[InventoryItem]) -> ConfiguratorSurvey {
 pub fn family_label(item: &InventoryItem) -> Option<(&str, &str)> {
     let compose = item
         .labels
-        .get_key_value("com.docker.compose.project")
+        .get_key_value(labels::compose_project_key())
         .filter(|(_, value)| !value.trim().is_empty());
     compose
         .or_else(|| {
@@ -875,7 +876,7 @@ fn add_candidate_resource(
     item: &InventoryItem,
     warning: bool,
 ) {
-    if matches!(selector, CandidateSelector::ExactLabel { ref key, .. } if key == "com.docker.compose.project")
+    if matches!(selector, CandidateSelector::ExactLabel { ref key, .. } if labels::is_compose_project(key))
         && item.kind == ResourceKind::Image
     {
         return;
@@ -906,15 +907,19 @@ fn candidate_resource(item: &InventoryItem) -> CandidateResource {
     }
 }
 
+/// Return whether a label key is a known agent family key.
+///
+/// Compose is handled on its own path with its own candidate identity and
+/// warning text, so it is excluded here even though the vocabulary carries it.
+/// Everything else comes from [`labels::VOCABULARY`], which is the only place a
+/// supported key is declared.
 fn is_agent_label(key: &str) -> bool {
-    key.starts_with("ai-agent.")
-        || key.starts_with("devcontainer.")
-        || key == "dev.docker-maid.managed"
+    labels::is_known(key) && !labels::is_compose_project(key)
 }
 
 fn candidate_display_rank(candidate: &CandidateFamily) -> u8 {
     match &candidate.selector {
-        CandidateSelector::ExactLabel { key, .. } if key == "com.docker.compose.project" => 1,
+        CandidateSelector::ExactLabel { key, .. } if labels::is_compose_project(key) => 1,
         CandidateSelector::ExactLabel { .. } => 0,
         CandidateSelector::NamePrefix { .. } => 2,
         CandidateSelector::BuildCache => 3,
@@ -924,7 +929,7 @@ fn candidate_display_rank(candidate: &CandidateFamily) -> u8 {
 fn is_compose_candidate(candidate: &CandidateFamily) -> bool {
     matches!(
         &candidate.selector,
-        CandidateSelector::ExactLabel { key, .. } if key == "com.docker.compose.project"
+        CandidateSelector::ExactLabel { key, .. } if labels::is_compose_project(key)
     )
 }
 
@@ -1539,6 +1544,118 @@ mod tests {
             dangling: false,
             system: false,
         }
+    }
+
+    /// Build one sample key for a vocabulary entry.
+    ///
+    /// A prefix entry is not a usable label on its own, so give it a leaf that
+    /// an agent would realistically write.
+    fn sample_key(entry: &labels::LabelKey) -> String {
+        match entry.matching {
+            labels::Match::Prefix => format!("{}owner", entry.key),
+            labels::Match::Exact => entry.key.to_owned(),
+        }
+    }
+
+    #[test]
+    fn every_advertised_label_key_is_adopted_by_the_survey() {
+        // The vertical's promise is that `labels`, is_agent_label, and the
+        // survey cannot disagree. Walk the published vocabulary and prove each
+        // key really does produce an adoptable candidate, so a key can never be
+        // advertised to an agent while the policy engine ignores it.
+        for entry in labels::VOCABULARY {
+            let key = sample_key(entry);
+            let inventory = vec![item(
+                ResourceKind::Container,
+                "c1",
+                "fixture",
+                &[(key.as_str(), "value")],
+            )];
+            let survey = survey_inventory(&inventory);
+            assert_eq!(
+                survey.candidates.len(),
+                1,
+                "{key} is advertised by `labels` but produced no candidate"
+            );
+            assert_eq!(
+                survey.summary.unowned_resources, 0,
+                "{key} is advertised by `labels` but left its resource unowned"
+            );
+            let selector = &survey.candidates[0].selector;
+            assert!(
+                matches!(selector, CandidateSelector::ExactLabel { key: k, .. } if k == &key),
+                "{key} must select on the exact key it was found under"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_outside_the_vocabulary_is_never_adopted() {
+        // The complement of the promise: anything the table does not publish
+        // stays unowned, so the survey cannot quietly claim more than `labels`
+        // told the operator about.
+        for key in [
+            "maintainer",
+            "org.opencontainers.image.source",
+            "ai-agentx.owner",
+            "com.docker.compose.service",
+            "dev.docker-maid.managed.extra",
+        ] {
+            let inventory = vec![item(
+                ResourceKind::Container,
+                "c1",
+                "fixture",
+                &[(key, "v")],
+            )];
+            let survey = survey_inventory(&inventory);
+            assert!(
+                survey.candidates.is_empty(),
+                "{key} is outside the vocabulary but produced a candidate"
+            );
+            assert_eq!(survey.summary.unowned_resources, 1);
+        }
+    }
+
+    #[test]
+    fn the_agent_label_test_is_the_vocabulary_minus_compose() {
+        // is_agent_label is the survey's second path, and Compose has its own.
+        // Prove the split is exactly that and not a second hand-kept list.
+        for entry in labels::VOCABULARY {
+            let key = sample_key(entry);
+            let compose = labels::is_compose_project(&key);
+            assert_eq!(
+                is_agent_label(&key),
+                !compose,
+                "{key} disagrees with the vocabulary about being an agent label"
+            );
+        }
+        assert!(!is_agent_label("maintainer"));
+    }
+
+    #[test]
+    fn family_label_resolves_through_the_vocabulary_with_compose_winning() {
+        // family_label backs the TUI protect action, so it must agree with the
+        // survey about which key names the family.
+        let both = item(
+            ResourceKind::Container,
+            "c1",
+            "fixture",
+            &[
+                ("ai-agent.owner", "agent"),
+                (labels::compose_project_key(), "stack"),
+            ],
+        );
+        assert_eq!(
+            family_label(&both),
+            Some((labels::compose_project_key(), "stack"))
+        );
+        let unknown = item(
+            ResourceKind::Container,
+            "c2",
+            "fixture",
+            &[("maintainer", "x")],
+        );
+        assert_eq!(family_label(&unknown), None);
     }
 
     #[test]
