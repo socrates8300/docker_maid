@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::executor::{ExecutionReport, TargetStatus};
 use crate::labels;
 use crate::plan::Plan;
+use crate::spawn::{SpawnOutcome, SpawnRequest};
 use crate::stamp::Stamp;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -113,6 +114,31 @@ pub fn stamp_document(stamp: &Stamp) -> Value {
         "command": "stamp",
         "labels": stamp.labels().clone(),
         "docker_arguments": stamp.docker_arguments(),
+    })
+}
+
+/// The sandbox `spawn` created.
+///
+/// `auto_remove` is stated rather than implied: a caller needs to know the
+/// container will still be there to inventory after it exits, and that nothing
+/// in this process is watching it.
+#[must_use]
+pub fn spawn_document(request: &SpawnRequest, outcome: &SpawnOutcome) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "command": "spawn",
+        "id": outcome.id,
+        "name": outcome.name,
+        "image": request.image(),
+        "labels": request.stamp().labels().clone(),
+        "workspace": request.workspace().map(|path| json!({
+            "host": path.to_string_lossy(),
+            "container": crate::spawn::WORKSPACE_MOUNT_PATH,
+        })),
+        "working_dir": request.workdir(),
+        "command_arguments": request.command(),
+        "auto_remove": false,
+        "warnings": outcome.warnings,
     })
 }
 

@@ -407,6 +407,38 @@ offers the stamped resource for adoption on the next pass. `stamp` reads no
 configuration, contacts no daemon, and changes nothing. Adoption by rule stays
 the first route; stamping only makes a new resource obvious.
 
+### Spawning a stamped sandbox
+
+`docker_maid spawn` creates one container already carrying the stamp, so an
+agent inherits ownership without having to remember it:
+
+```
+docker_maid spawn --image my-sandbox:latest --owner my-agent \
+  --workspace /absolute/path/to/project -- npm test
+```
+
+The host directory is bound at `/workspace`, which also becomes the working
+directory unless `--workdir` says otherwise.
+
+Two properties matter more than the flags:
+
+- **It does not parent the agent.** The sandbox is always detached and is never
+  removed automatically. It outlives this command, nothing attaches to its
+  streams, and no cleanup is tied to the command exiting. An exited sandbox is
+  still there to be inventoried, which is what lets a rule adopt and later
+  reclaim it.
+- **It does not proxy Docker.** There is no route here for ports, networks,
+  environment variables, users, capabilities, or limits, and it never pulls an
+  image. For any of those, run Docker yourself:
+
+```sh
+docker run -d --network mynet -e KEY=value \
+  $(docker_maid stamp --owner my-agent --docker-args) my-sandbox:latest
+```
+
+An image that is not present locally is an error naming the `docker pull` to
+run, because the maid never reaches the network on your behalf.
+
 Build-cache records do not expose ownership metadata. Configure their explicit
 escape hatch in bytes and durations:
 

@@ -267,6 +267,43 @@ shell interpolation. It is not a machine document, so combining it with
 `--format` or `--json` is a `usage` error with exit `64`. An `--owner` value
 outside letters, digits, dot, dash, and underscore is the same error.
 
+## Spawn document
+
+`spawn --format json` returns the sandbox that was created:
+
+```json
+{
+  "schema_version": 1,
+  "command": "spawn",
+  "id": "full-daemon-id",
+  "name": "agile_hopper",
+  "image": "my-sandbox:latest",
+  "labels": {"dev.docker-maid.managed": "true"},
+  "workspace": {"host": "/absolute/path", "container": "/workspace"},
+  "working_dir": "/workspace",
+  "command_arguments": ["npm", "test"],
+  "auto_remove": false,
+  "warnings": []
+}
+```
+
+`labels` is exactly what the stamp document would emit for the same `--owner`,
+so a spawned sandbox is adoptable evidence with no configuration written.
+`workspace` and `working_dir` are `null` when no workspace was bound and no
+working directory applies. `command_arguments` is empty when the image default
+runs. `warnings` carries whatever Docker returned about the create request.
+
+`auto_remove` is always `false` and is stated rather than implied. The sandbox
+is created detached, nothing attaches to its streams, and the command returns
+without waiting for it, so the container outlives the process that asked for it
+and is still present to be inventoried after it exits.
+
+A missing image is a `usage` error with exit `64`: the invocation named
+something this host does not have, and `spawn` never pulls. So are a blank
+image or name, a relative or non-existent workspace, and a relative working
+directory. A daemon that cannot be reached, or that refuses the create or
+start, is `docker_unreachable` with exit `5`.
+
 `--version --format json` returns `command: "version"` and `version`.
 
 ## Daemon NDJSON

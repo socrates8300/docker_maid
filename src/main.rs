@@ -12,6 +12,7 @@ use docker_maid::labels;
 use docker_maid::machine;
 use docker_maid::observation::{ObservationState, ObservationStore};
 use docker_maid::plan::{build_plan_with_context, Action, Disposition, Plan, PlanContext};
+use docker_maid::spawn::{spawn_sandbox, SpawnError, SpawnOutcome, SpawnRequest};
 use docker_maid::stamp::Stamp;
 use docker_maid::state::{ProtectionKind, ProtectionState, ProtectionStore, StatePaths};
 use std::ffi::OsString;
@@ -138,6 +139,39 @@ enum Command {
         #[arg(long)]
         docker_args: bool,
     },
+    /// Create one stamped sandbox container and return without watching it.
+    ///
+    /// The sandbox is always detached and is never removed automatically, so
+    /// it outlives this process and can be inventoried afterwards. Nothing
+    /// here attaches to it, waits for it, or ties cleanup to this process
+    /// exiting.
+    ///
+    /// The surface is deliberately small. For ports, networks, environment,
+    /// users, or limits, run Docker directly and apply
+    /// `docker_maid stamp --docker-args` at creation instead.
+    Spawn(SpawnArgs),
+}
+
+#[derive(Debug, Args)]
+struct SpawnArgs {
+    /// Image to create the sandbox from; it must already be present.
+    #[arg(long, value_name = "IMAGE")]
+    image: String,
+    /// Name the agent that owns the sandbox.
+    #[arg(long, value_name = "NAME")]
+    owner: Option<String>,
+    /// Name the container; Docker chooses one when this is omitted.
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
+    /// Absolute host directory to bind at /workspace inside the sandbox.
+    #[arg(long, value_name = "PATH")]
+    workspace: Option<PathBuf>,
+    /// Absolute directory the sandbox starts in.
+    #[arg(long, value_name = "PATH")]
+    workdir: Option<String>,
+    /// Command to run instead of the image default.
+    #[arg(trailing_var_arg = true, value_name = "COMMAND")]
+    command: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -318,6 +352,7 @@ enum RunError {
     Configurator(ConfiguratorError),
     Docker(docker_maid::inventory::InventoryError),
     Execution(docker_maid::executor::ExecutionError),
+    Spawn(SpawnError),
     State(String),
     Tty(String),
     Usage(String),
@@ -352,6 +387,12 @@ impl From<docker_maid::inventory::InventoryError> for RunError {
 impl From<docker_maid::executor::ExecutionError> for RunError {
     fn from(error: docker_maid::executor::ExecutionError) -> Self {
         Self::Execution(error)
+    }
+}
+
+impl From<SpawnError> for RunError {
+    fn from(error: SpawnError) -> Self {
+        Self::Spawn(error)
     }
 }
 
@@ -451,7 +492,29 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
             }
             Ok(RunOutcome::Success)
         }
+        Command::Spawn(arguments) => run_spawn(arguments, format).await,
     }
+}
+
+/// Create one stamped sandbox and report it, without watching it afterwards.
+async fn run_spawn(arguments: SpawnArgs, format: OutputFormat) -> Result<RunOutcome, RunError> {
+    let stamp = Stamp::new(arguments.owner.as_deref())
+        .map_err(|error| RunError::Usage(error.to_string()))?;
+    let request = SpawnRequest::new(
+        &arguments.image,
+        arguments.name.as_deref(),
+        arguments.workspace.as_deref(),
+        arguments.workdir.as_deref(),
+        arguments.command,
+        stamp,
+    )?;
+    let outcome = spawn_sandbox(&request).await?;
+    if format == OutputFormat::Json {
+        write_json_payload(&machine::spawn_document(&request, &outcome))?;
+    } else {
+        write_payload(render_spawn(&request, &outcome).as_bytes())?;
+    }
+    Ok(RunOutcome::Success)
 }
 
 /// Render the canonical label vocabulary as an aligned table.
@@ -504,6 +567,41 @@ fn render_stamp(stamp: &Stamp) -> String {
          `config survey` then offers the result for adoption. Use\n\
          `docker_maid stamp --docker-args` to print that flag line alone.\n",
         stamp.docker_argument_line()
+    );
+    out
+}
+
+/// Render what the sandbox is and what this process is not doing about it.
+///
+/// The closing line is the point of the command as much as the container is:
+/// an operator who reads this must not go looking for a supervisor process
+/// that never existed.
+fn render_spawn(request: &SpawnRequest, outcome: &SpawnOutcome) -> String {
+    let mut out = String::from("Sandbox created\n\n");
+    let _ = writeln!(out, "name   {}", outcome.name);
+    let _ = writeln!(out, "id     {}", outcome.id);
+    let _ = writeln!(out, "image  {}", request.image());
+    if let Some(workspace) = request.workspace() {
+        let _ = writeln!(
+            out,
+            "mount  {} -> {}",
+            workspace.display(),
+            docker_maid::spawn::WORKSPACE_MOUNT_PATH
+        );
+    }
+    if let Some(workdir) = request.workdir() {
+        let _ = writeln!(out, "cwd    {workdir}");
+    }
+    for (key, value) in request.stamp().labels() {
+        let _ = writeln!(out, "label  {key}={value}");
+    }
+    for warning in &outcome.warnings {
+        let _ = writeln!(out, "warn   {warning}");
+    }
+    out.push_str(
+        "\nThe sandbox is detached and is not removed automatically, so it\n\
+         outlives this command. Nothing is attached to it and nothing is\n\
+         watching it: stop and remove it yourself, or let a rule adopt it.\n",
     );
     out
 }
@@ -1192,6 +1290,7 @@ fn run_error_message(error: &RunError) -> String {
         RunError::Configurator(error) => error.to_string(),
         RunError::Docker(error) => error.to_string(),
         RunError::Execution(error) => error.to_string(),
+        RunError::Spawn(error) => error.to_string(),
         RunError::State(error)
         | RunError::Tty(error)
         | RunError::Usage(error)
@@ -1205,9 +1304,13 @@ fn run_error_classification(error: &RunError) -> (u8, &'static str) {
         RunError::Config(_) | RunError::Configurator(_) => (EXIT_CONFIG, "config_invalid"),
         RunError::Execution(docker_maid::executor::ExecutionError::State(_))
         | RunError::State(_) => (EXIT_STATE, "state_io"),
-        RunError::Docker(_) | RunError::Execution(_) => (EXIT_DOCKER, "docker_unreachable"),
+        RunError::Docker(_)
+        | RunError::Execution(_)
+        | RunError::Spawn(SpawnError::Docker { .. }) => (EXIT_DOCKER, "docker_unreachable"),
         RunError::Tty(_) => (EXIT_TTY, "tty_required"),
-        RunError::Usage(_) => (EXIT_USAGE, "usage"),
+        // Every remaining spawn failure names something the caller asked for
+        // that this host cannot supply, so the fix is the invocation.
+        RunError::Usage(_) | RunError::Spawn(_) => (EXIT_USAGE, "usage"),
         RunError::Internal(_) | RunError::Output(_) => (EXIT_INTERNAL, "internal"),
     }
 }
