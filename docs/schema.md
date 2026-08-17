@@ -42,7 +42,7 @@ Stable error kinds are:
 |---|---:|---|
 | `config_invalid` | `3` | Configuration is missing, unreadable, or invalid |
 | `docker_unreachable` | `5` | Docker is unavailable or incompatible |
-| `state_io` | `6` | Protection, observation, or activity state cannot be used safely |
+| `state_io` | `6` | A file this tool manages cannot be used safely: protection, observation, or activity state, or an agent-skill install |
 | `partial_failure` | `2` | An applied pass skipped or failed at least one target |
 | `internal` | `7` | Output or an internal invariant failed |
 | `usage` | `64` | Command-line invocation is invalid |
@@ -303,6 +303,32 @@ something this host does not have, and `spawn` never pulls. So are a blank
 image or name, a relative or non-existent workspace, and a relative working
 directory. A daemon that cannot be reached, or that refuses the create or
 start, is `docker_unreachable` with exit `5`.
+
+## Agent skill install document
+
+`init --agents --format json` returns where the portable agent skill went:
+
+```json
+{
+  "schema_version": 1,
+  "command": "init",
+  "mode": "agents",
+  "target": "claude",
+  "path": "/home/you/.claude/skills/docker-maid/SKILL.md",
+  "status": "written"
+}
+```
+
+`mode` is `agents`, the only supported install. `target` is `claude`, `codex`,
+or `generic`. `status` is `written` for a fresh install, `unchanged` when the
+same document was already there, and `replaced` when `--force` overwrote a
+different one.
+
+The command writes exactly one file and reads no configuration, so an operator's
+policy is never touched. A missing `--agents`, a missing `--target`, a
+`generic` target with no `--dest`, and an existing different skill without
+`--force` are all `usage` errors with exit `64`. A skill that cannot be written
+is `state_io` with exit `6`.
 
 `--version --format json` returns `command: "version"` and `version`.
 

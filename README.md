@@ -439,6 +439,29 @@ docker run -d --network mynet -e KEY=value \
 An image that is not present locally is an error naming the `docker pull` to
 run, because the maid never reaches the network on your behalf.
 
+### Teaching an agent to use the CLI
+
+`docker_maid init --agents` installs a portable skill that tells a coding agent
+how to drive this tool. The skill is compiled into the binary, so installing it
+needs no network:
+
+```
+docker_maid init --agents --target claude
+docker_maid init --agents --target codex
+docker_maid init --agents --target generic --dest /path/to/skills
+```
+
+It writes exactly one file, `<skills>/docker-maid/SKILL.md`, and nothing else.
+It never reads or edits your configuration: policy stays human-owned.
+
+The target is required rather than guessed, because the alternative is writing
+into a home directory nobody chose. Reinstalling reports `unchanged` and needs
+no flags. A skill you have edited yourself is kept until you pass `--force`.
+
+The skill teaches the CLI; it does not reimplement it. It sends an agent to
+`spawn` and `stamp` rather than to a wrapper of its own, and a test holds every
+command it mentions against this build's actual command surface.
+
 Build-cache records do not expose ownership metadata. Configure their explicit
 escape hatch in bytes and durations:
 

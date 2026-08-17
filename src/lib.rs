@@ -1,6 +1,7 @@
 //! Shared application logic for `docker_maid`.
 
 pub mod activity;
+pub mod agent_skill;
 pub mod config;
 pub mod configurator;
 pub mod executor;

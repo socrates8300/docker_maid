@@ -1,5 +1,6 @@
 use clap::{error::ErrorKind, Args, Parser, Subcommand, ValueEnum};
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
+use docker_maid::agent_skill::{install_skill, resolve_skill_path, InstallTarget, SkillError};
 use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
 use docker_maid::configurator::{
     add_name_prefix_candidate, candidate_display_indices, configuration_target_path,
@@ -150,6 +151,48 @@ enum Command {
     /// users, or limits, run Docker directly and apply
     /// `docker_maid stamp --docker-args` at creation instead.
     Spawn(SpawnArgs),
+    /// Install the portable agent skill into a harness's skills directory.
+    ///
+    /// The skill teaches an agent to drive this CLI. It is compiled into the
+    /// binary, so installing needs no network, and it never touches the
+    /// configuration file: policy stays human-owned.
+    Init(InitArgs),
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Install the agent skill; currently the only supported mode.
+    #[arg(long)]
+    agents: bool,
+    /// Which harness's skills directory to install into.
+    #[arg(long, value_enum, value_name = "HARNESS")]
+    target: Option<CliInstallTarget>,
+    /// Skills directory to install into, instead of the target's own.
+    #[arg(long, value_name = "PATH")]
+    dest: Option<PathBuf>,
+    /// Replace an installed skill that differs from this build's.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliInstallTarget {
+    /// `~/.claude/skills`.
+    Claude,
+    /// `~/.codex/skills`.
+    Codex,
+    /// A directory named by --dest.
+    Generic,
+}
+
+impl From<CliInstallTarget> for InstallTarget {
+    fn from(target: CliInstallTarget) -> Self {
+        match target {
+            CliInstallTarget::Claude => Self::Claude,
+            CliInstallTarget::Codex => Self::Codex,
+            CliInstallTarget::Generic => Self::Generic,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -353,6 +396,7 @@ enum RunError {
     Docker(docker_maid::inventory::InventoryError),
     Execution(docker_maid::executor::ExecutionError),
     Spawn(SpawnError),
+    Skill(SkillError),
     State(String),
     Tty(String),
     Usage(String),
@@ -393,6 +437,12 @@ impl From<docker_maid::executor::ExecutionError> for RunError {
 impl From<SpawnError> for RunError {
     fn from(error: SpawnError) -> Self {
         Self::Spawn(error)
+    }
+}
+
+impl From<SkillError> for RunError {
+    fn from(error: SkillError) -> Self {
+        Self::Skill(error)
     }
 }
 
@@ -493,7 +543,41 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
             Ok(RunOutcome::Success)
         }
         Command::Spawn(arguments) => run_spawn(arguments, format).await,
+        Command::Init(arguments) => run_init(&arguments, format),
     }
+}
+
+/// Install the portable agent skill and report where it landed.
+///
+/// The target is required rather than guessed, because the alternative is
+/// writing files into someone's home directory on a default nobody chose.
+fn run_init(arguments: &InitArgs, format: OutputFormat) -> Result<RunOutcome, RunError> {
+    if !arguments.agents {
+        return Err(RunError::Usage(
+            "init needs --agents; installing the agent skill is its only mode".to_owned(),
+        ));
+    }
+    let Some(target) = arguments.target else {
+        return Err(RunError::Usage(
+            "init --agents needs --target claude, codex, or generic".to_owned(),
+        ));
+    };
+    let target = InstallTarget::from(target);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = resolve_skill_path(target, arguments.dest.as_deref(), home.as_deref())?;
+    let installation = install_skill(&path, arguments.force)?;
+    if format == OutputFormat::Json {
+        write_json_payload(&machine::init_document(target, &installation))?;
+    } else {
+        let message = format!(
+            "Agent skill {} at {}\n\nThe skill teaches an agent to drive this CLI. Your\n\
+             configuration file was not read or changed.\n",
+            installation.status,
+            installation.path.display()
+        );
+        write_payload(message.as_bytes())?;
+    }
+    Ok(RunOutcome::Success)
 }
 
 /// Create one stamped sandbox and report it, without watching it afterwards.
@@ -1291,6 +1375,7 @@ fn run_error_message(error: &RunError) -> String {
         RunError::Docker(error) => error.to_string(),
         RunError::Execution(error) => error.to_string(),
         RunError::Spawn(error) => error.to_string(),
+        RunError::Skill(error) => error.to_string(),
         RunError::State(error)
         | RunError::Tty(error)
         | RunError::Usage(error)
@@ -1302,15 +1387,19 @@ fn run_error_message(error: &RunError) -> String {
 fn run_error_classification(error: &RunError) -> (u8, &'static str) {
     match error {
         RunError::Config(_) | RunError::Configurator(_) => (EXIT_CONFIG, "config_invalid"),
+        // A skill that cannot be written is a filesystem problem on a file
+        // this tool manages, which is the same thing a caller checks for when
+        // protection or observation state fails.
         RunError::Execution(docker_maid::executor::ExecutionError::State(_))
-        | RunError::State(_) => (EXIT_STATE, "state_io"),
+        | RunError::State(_)
+        | RunError::Skill(SkillError::Write { .. }) => (EXIT_STATE, "state_io"),
         RunError::Docker(_)
         | RunError::Execution(_)
         | RunError::Spawn(SpawnError::Docker { .. }) => (EXIT_DOCKER, "docker_unreachable"),
         RunError::Tty(_) => (EXIT_TTY, "tty_required"),
         // Every remaining spawn failure names something the caller asked for
         // that this host cannot supply, so the fix is the invocation.
-        RunError::Usage(_) | RunError::Spawn(_) => (EXIT_USAGE, "usage"),
+        RunError::Usage(_) | RunError::Spawn(_) | RunError::Skill(_) => (EXIT_USAGE, "usage"),
         RunError::Internal(_) | RunError::Output(_) => (EXIT_INTERNAL, "internal"),
     }
 }

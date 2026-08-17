@@ -1,6 +1,7 @@
 //! Stable schema-version 1 machine output.
 
 use crate::activity::{CompletedPass, EventData};
+use crate::agent_skill::{InstallTarget, Installation};
 use crate::config::Config;
 use crate::executor::{ExecutionReport, TargetStatus};
 use crate::labels;
@@ -139,6 +140,23 @@ pub fn spawn_document(request: &SpawnRequest, outcome: &SpawnOutcome) -> Value {
         "command_arguments": request.command(),
         "auto_remove": false,
         "warnings": outcome.warnings,
+    })
+}
+
+/// Where the agent skill was installed and what happened there.
+///
+/// `status` distinguishes a fresh write from a rerun that found the same
+/// document, so a caller can tell an install apart from a no-op without
+/// hashing the file itself.
+#[must_use]
+pub fn init_document(target: InstallTarget, installation: &Installation) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "command": "init",
+        "mode": "agents",
+        "target": target.to_string(),
+        "path": installation.path.to_string_lossy(),
+        "status": installation.status.to_string(),
     })
 }
 
