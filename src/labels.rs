@@ -148,10 +148,29 @@ pub fn is_compose_project(key: &str) -> bool {
     key == compose_project_key()
 }
 
+/// The key `docker_maid` writes when it marks a resource it created.
+///
+/// This is the writing side of the same table the survey reads, so anything
+/// stamped with it is evidence the survey already understands.
+#[must_use]
+pub fn managed_key() -> &'static str {
+    VOCABULARY[1].key
+}
+
+/// The namespace a coding agent uses to claim what it created.
+///
+/// The entry is a prefix, so this string is not a usable label on its own. A
+/// caller appends a leaf, such as `owner`, to name one fact about the family.
+#[must_use]
+pub fn agent_namespace() -> &'static str {
+    VOCABULARY[2].key
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_project_key, is_compose_project, is_known, lookup, Match, Role, VOCABULARY,
+        agent_namespace, compose_project_key, is_compose_project, is_known, lookup, managed_key,
+        Match, Role, VOCABULARY,
     };
 
     #[test]
@@ -241,5 +260,23 @@ mod tests {
         assert!(VOCABULARY
             .iter()
             .any(|entry| entry.key == compose_project_key() && entry.matching == Match::Exact));
+    }
+
+    #[test]
+    fn the_writing_accessors_agree_with_the_table() {
+        // These two name the rows `stamp` writes. Reordering the table would
+        // silently repoint them at another vendor's namespace, so pin them.
+        assert_eq!(managed_key(), "dev.docker-maid.managed");
+        assert_eq!(agent_namespace(), "ai-agent.");
+        let managed = lookup(managed_key()).expect("the managed key is in the table");
+        assert_eq!(managed.matching, Match::Exact);
+        let agent = lookup(&format!("{}owner", agent_namespace()))
+            .expect("a leaf in the agent namespace is in the table");
+        assert_eq!(agent.matching, Match::Prefix);
+        assert_eq!(agent.key, agent_namespace());
+        // Neither row is Compose, so a stamped resource is an agent family and
+        // never masquerades as an operator-declared Compose stack.
+        assert!(!is_compose_project(managed_key()));
+        assert!(!is_compose_project(agent_namespace()));
     }
 }

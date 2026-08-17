@@ -12,6 +12,7 @@ use docker_maid::labels;
 use docker_maid::machine;
 use docker_maid::observation::{ObservationState, ObservationStore};
 use docker_maid::plan::{build_plan_with_context, Action, Disposition, Plan, PlanContext};
+use docker_maid::stamp::Stamp;
 use docker_maid::state::{ProtectionKind, ProtectionState, ProtectionStore, StatePaths};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -123,6 +124,20 @@ enum Command {
     /// one of them is discoverable by `config survey` without any further
     /// configuration.
     Labels,
+    /// Print the ownership labels to apply when creating a Docker resource.
+    ///
+    /// Docker fixes labels at creation and offers no way to relabel an
+    /// existing container, image, volume, or network, so this command emits
+    /// the stamp instead of applying it. It reads no configuration, contacts
+    /// no daemon, and changes nothing.
+    Stamp {
+        /// Name the agent that owns what it creates.
+        #[arg(long, value_name = "NAME")]
+        owner: Option<String>,
+        /// Print only the Docker flags, on one line, for shell interpolation.
+        #[arg(long)]
+        docker_args: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -413,6 +428,29 @@ async fn run(cli: Cli, format: OutputFormat) -> Result<RunOutcome, RunError> {
             }
             Ok(RunOutcome::Success)
         }
+        Command::Stamp { owner, docker_args } => {
+            // `--docker-args` is a third output shape, so pairing it with an
+            // explicit `--format` or `--json` asks for two answers at once.
+            // clap cannot catch this: `--json` is a global flag that may sit
+            // before the subcommand, where a subcommand-level conflict rule
+            // never fires. Refusing beats letting argument order decide.
+            if docker_args && machine_format_requested {
+                return Err(RunError::Usage(
+                    "--docker-args prints the flag line only; drop --format or --json".to_owned(),
+                ));
+            }
+            let stamp =
+                Stamp::new(owner.as_deref()).map_err(|error| RunError::Usage(error.to_string()))?;
+            if docker_args {
+                let line = format!("{}\n", stamp.docker_argument_line());
+                write_payload(line.as_bytes())?;
+            } else if format == OutputFormat::Json {
+                write_json_payload(&machine::stamp_document(&stamp))?;
+            } else {
+                write_payload(render_stamp(&stamp).as_bytes())?;
+            }
+            Ok(RunOutcome::Success)
+        }
     }
 }
 
@@ -444,6 +482,28 @@ fn render_labels() -> String {
     out.push_str(
         "\nA resource carrying one of these keys is ownership evidence that\n\
          `config survey` can offer to adopt. Any other key is ignored.\n",
+    );
+    out
+}
+
+/// Render the ownership stamp with the flag line a caller actually needs.
+///
+/// The pairs are shown first because they are the authoritative form, and the
+/// flag line follows because that is what gets pasted. The note about creation
+/// is not decoration: an operator who expects `stamp` to relabel a running
+/// container has to learn here that Docker does not allow it.
+fn render_stamp(stamp: &Stamp) -> String {
+    let mut out = String::from("Ownership stamp\n\n");
+    for (key, value) in stamp.labels() {
+        let _ = writeln!(out, "{key}={value}");
+    }
+    let _ = write!(
+        out,
+        "\nDocker accepts labels only when a resource is created, so apply these\n\
+         flags at creation:\n\n  {}\n\n\
+         `config survey` then offers the result for adoption. Use\n\
+         `docker_maid stamp --docker-args` to print that flag line alone.\n",
+        stamp.docker_argument_line()
     );
     out
 }

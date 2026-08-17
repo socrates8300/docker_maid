@@ -378,6 +378,35 @@ matched by prefix, and that is how you write them in a selector.
 An agent that stamps one of these keys on what it creates becomes discoverable
 without any further configuration.
 
+### Stamping what an agent creates
+
+Docker fixes labels at creation. There is no API to relabel an existing
+container, image, volume, or network, so `docker_maid` cannot walk up to a
+resource and mark it as its own. `docker_maid stamp` therefore emits the labels
+and the caller applies them at creation:
+
+```
+docker_maid stamp                                # the pairs, with an example
+docker_maid --json stamp --owner my-agent        # for a tool
+docker_maid stamp --owner my-agent --docker-args # for a shell
+```
+
+The flag line is meant to be interpolated, and no value ever needs quoting:
+
+```sh
+docker run -d $(docker_maid stamp --owner my-agent --docker-args) alpine sleep 600
+docker volume create $(docker_maid stamp --owner my-agent --docker-args)
+```
+
+`--owner` accepts letters, digits, dot, dash, and underscore. Anything else is
+refused rather than quoted, because a name holding a space would split into two
+Docker arguments once a shell expands the line.
+
+The stamp writes only keys `docker_maid labels` advertises, so `config survey`
+offers the stamped resource for adoption on the next pass. `stamp` reads no
+configuration, contacts no daemon, and changes nothing. Adoption by rule stays
+the first route; stamping only makes a new resource obvious.
+
 Build-cache records do not expose ownership metadata. Configure their explicit
 escape hatch in bytes and durations:
 

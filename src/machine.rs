@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::executor::{ExecutionReport, TargetStatus};
 use crate::labels;
 use crate::plan::Plan;
+use crate::stamp::Stamp;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -97,6 +98,21 @@ pub fn labels_document() -> Value {
         "schema_version": SCHEMA_VERSION,
         "command": "labels",
         "keys": keys,
+    })
+}
+
+/// The ownership stamp a caller applies when it creates a Docker resource.
+///
+/// `labels` is the authoritative form. `docker_arguments` is the same content
+/// spelled as command-line flags, so a caller that shells out does not have to
+/// rebuild the pairs and risk quoting them differently.
+#[must_use]
+pub fn stamp_document(stamp: &Stamp) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "command": "stamp",
+        "labels": stamp.labels().clone(),
+        "docker_arguments": stamp.docker_arguments(),
     })
 }
 

@@ -229,6 +229,44 @@ This document and the ownership survey read one table, so a key listed here is
 exactly a key `config survey` can offer to adopt. The command reads no
 configuration and needs no Docker daemon.
 
+## Stamp document
+
+`stamp --format json` returns the ownership labels a caller applies when it
+creates a resource:
+
+```json
+{
+  "schema_version": 1,
+  "command": "stamp",
+  "labels": {
+    "ai-agent.owner": "my-agent",
+    "dev.docker-maid.managed": "true"
+  },
+  "docker_arguments": [
+    "--label", "ai-agent.owner=my-agent",
+    "--label", "dev.docker-maid.managed=true"
+  ]
+}
+```
+
+`labels` is the authoritative form and is always present. `docker_arguments` is
+the same content spelled as command-line flags, in the same key order, so a
+caller that shells out does not rebuild the pairs itself. `ai-agent.owner`
+appears only when `--owner` was given.
+
+Every key in `labels` is a key the label vocabulary document advertises, so a
+stamped resource is evidence `config survey` can offer to adopt.
+
+Docker accepts labels only when a resource is created and exposes no route to
+relabel an existing container, image, volume, or network. The command therefore
+emits the stamp and never applies it: it reads no configuration, contacts no
+daemon, and changes nothing.
+
+`stamp --docker-args` writes the flag line alone, with no JSON and no prose, for
+shell interpolation. It is not a machine document, so combining it with
+`--format` or `--json` is a `usage` error with exit `64`. An `--owner` value
+outside letters, digits, dot, dash, and underscore is the same error.
+
 `--version --format json` returns `command: "version"` and `version`.
 
 ## Daemon NDJSON

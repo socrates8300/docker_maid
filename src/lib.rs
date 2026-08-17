@@ -9,4 +9,5 @@ pub mod labels;
 pub mod machine;
 pub mod observation;
 pub mod plan;
+pub mod stamp;
 pub mod state;
