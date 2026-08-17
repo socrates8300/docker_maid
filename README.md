@@ -143,7 +143,7 @@ The deletion contract is the same in the TUI, the tables, and `--json`.
 | `labels` | Canonical ownership label keys this build understands |
 | `stamp` | Emit those labels for the caller to apply at create time |
 | `spawn` | Create one stamped sandbox and return; no attach, no wait |
-| `init --agents` | Install the portable skill that teaches an agent the CLI |
+| `init --agents` | Install the portable skills that teach an agent the CLI |
 
 Global flags: `--config <path>`, `--format table|json`, `--json`.
 
@@ -484,21 +484,33 @@ An image that is not present locally is an error naming the
 
 ### Teach an agent the CLI
 
-`docker_maid init --agents` installs a portable skill compiled into the
-binary. Installing it needs no network. It writes exactly one file,
-`<skills>/docker-maid/SKILL.md`, and never reads or edits your
-configuration.
+`docker_maid init --agents` installs two portable skills compiled into
+the binary. Installing them needs no network, and neither one reads or
+edits your configuration.
+
+| Skill | Teaches |
+|---|---|
+| `docker-maid` | Creating stamped resources and reclaiming them |
+| `docker-maid-config` | Writing, applying, and proving a policy file |
+
+Each lands at `<skills>/<skill-name>/SKILL.md`.
 
 ```sh
 docker_maid init --agents --target claude
 docker_maid init --agents --target codex
 docker_maid init --agents --target generic --dest /path/to/skills
+docker_maid init --agents --target claude --skill docker-maid-config
 ```
 
 The target is required rather than guessed. Reinstalling reports
 `unchanged`. A skill you have edited yourself is kept until you pass
-`--force`. The skill sends an agent to `spawn` and `stamp`; it does not
-reimplement them.
+`--force`, and a refusal on one skill installs none of them. `--skill`
+selects a subset; the default is all of them.
+
+The first skill sends an agent to `spawn` and `stamp` rather than
+reimplementing them. The second teaches the strict configuration schema,
+the selector syntax, and why a brand new policy removes nothing on its
+first pass.
 
 ### Machine output
 
@@ -579,9 +591,10 @@ remove disposable objects; they are not a cleanup of your daemon.
 | `src/wakeup.rs` | Event debounce and interval backstop |
 | `src/labels.rs` | Sole ownership-key table |
 | `src/stamp.rs` / `spawn.rs` | Creation-time stamp and thin sandbox |
-| `src/agent_skill.rs` | Embedded portable skill |
+| `src/agent_skill.rs` | Embedded portable skills |
 | `docs/schema.md` | Machine schema v1 |
-| `assets/agent-skill/SKILL.md` | Skill source compiled into the binary |
+| `assets/agent-skill/SKILL.md` | Resource skill compiled into the binary |
+| `assets/agent-skill-config/SKILL.md` | Policy-authoring skill compiled into the binary |
 
 The safety-critical core is a pure inventory-to-disposition pipeline. It
 produces immutable plans for a separate executor. Frontends contain no

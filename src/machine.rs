@@ -143,20 +143,34 @@ pub fn spawn_document(request: &SpawnRequest, outcome: &SpawnOutcome) -> Value {
     })
 }
 
-/// Where the agent skill was installed and what happened there.
+/// Where the agent skills were installed and what happened to each.
 ///
 /// `status` distinguishes a fresh write from a rerun that found the same
 /// document, so a caller can tell an install apart from a no-op without
 /// hashing the file itself.
+///
+/// `path` and `status` describe the first skill installed and keep the exact
+/// meaning they had when this command wrote one file. `skills` is the complete
+/// list. That keeps the addition additive, which is what schema version 1
+/// promises: a caller reading `.path` gets the same value it always got.
 #[must_use]
-pub fn init_document(target: InstallTarget, installation: &Installation) -> Value {
+pub fn init_document(target: InstallTarget, installations: &[Installation]) -> Value {
+    let first = installations.first();
     json!({
         "schema_version": SCHEMA_VERSION,
         "command": "init",
         "mode": "agents",
         "target": target.to_string(),
-        "path": installation.path.to_string_lossy(),
-        "status": installation.status.to_string(),
+        "path": first.map(|installation| installation.path.to_string_lossy()),
+        "status": first.map(|installation| installation.status.to_string()),
+        "skills": installations
+            .iter()
+            .map(|installation| json!({
+                "name": installation.name,
+                "path": installation.path.to_string_lossy(),
+                "status": installation.status.to_string(),
+            }))
+            .collect::<Vec<_>>(),
     })
 }
 

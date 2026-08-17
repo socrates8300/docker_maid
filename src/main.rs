@@ -1,6 +1,8 @@
 use clap::{error::ErrorKind, Args, Parser, Subcommand, ValueEnum};
 use docker_maid::activity::{stable_config_hash, ActivityJournal, CompletedPass, EventData};
-use docker_maid::agent_skill::{install_skill, resolve_skill_path, InstallTarget, SkillError};
+use docker_maid::agent_skill::{
+    install_skills, skill_by_name, skill_names, InstallTarget, Skill, SkillError, SKILLS,
+};
 use docker_maid::config::{load_config, Config, LoadedConfig, DEFAULT_CONFIG};
 use docker_maid::configurator::{
     add_name_prefix_candidate, candidate_display_indices, configuration_target_path,
@@ -165,7 +167,7 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// Install the agent skill; currently the only supported mode.
+    /// Install the agent skills; currently the only supported mode.
     #[arg(long)]
     agents: bool,
     /// Which harness's skills directory to install into.
@@ -174,6 +176,9 @@ struct InitArgs {
     /// Skills directory to install into, instead of the target's own.
     #[arg(long, value_name = "PATH")]
     dest: Option<PathBuf>,
+    /// Install only this skill; repeat to select more. Default: every skill.
+    #[arg(long = "skill", value_name = "NAME")]
+    skills: Vec<String>,
     /// Replace an installed skill that differs from this build's.
     #[arg(long)]
     force: bool,
@@ -567,21 +572,56 @@ fn run_init(arguments: &InitArgs, format: OutputFormat) -> Result<RunOutcome, Ru
         ));
     };
     let target = InstallTarget::from(target);
+    let selection = select_skills(&arguments.skills)?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let path = resolve_skill_path(target, arguments.dest.as_deref(), home.as_deref())?;
-    let installation = install_skill(&path, arguments.force)?;
+    let installations = install_skills(
+        &selection,
+        target,
+        arguments.dest.as_deref(),
+        home.as_deref(),
+        arguments.force,
+    )?;
     if format == OutputFormat::Json {
-        write_json_payload(&machine::init_document(target, &installation))?;
+        write_json_payload(&machine::init_document(target, &installations))?;
     } else {
-        let message = format!(
-            "Agent skill {} at {}\n\nThe skill teaches an agent to drive this CLI. Your\n\
+        let mut message = String::new();
+        for installation in &installations {
+            let line = format!(
+                "Agent skill {} {} at {}\n",
+                installation.name,
+                installation.status,
+                installation.path.display()
+            );
+            message.push_str(&line);
+        }
+        message.push_str(
+            "\nThe skills teach an agent to drive this CLI. Your\n\
              configuration file was not read or changed.\n",
-            installation.status,
-            installation.path.display()
         );
         write_payload(message.as_bytes())?;
     }
     Ok(RunOutcome::Success)
+}
+
+/// Resolve `--skill` names to skills, defaulting to every skill this build has.
+///
+/// An unknown name is a usage error that lists the real set rather than a
+/// silent install of nothing, because installing nothing looks like success.
+fn select_skills(requested: &[String]) -> Result<Vec<&'static Skill>, RunError> {
+    if requested.is_empty() {
+        return Ok(SKILLS.iter().collect());
+    }
+    requested
+        .iter()
+        .map(|name| {
+            skill_by_name(name).ok_or_else(|| {
+                RunError::Usage(format!(
+                    "unknown skill {name:?}; this build installs {}",
+                    skill_names().join(", ")
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Create one stamped sandbox and report it, without watching it afterwards.

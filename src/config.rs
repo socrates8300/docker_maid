@@ -77,6 +77,17 @@ const RETIRED_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Every configuration key this build has retired.
+///
+/// Published so the agent skills can be held to it: a document that taught a
+/// retired key would send an agent straight to a parse failure, and the
+/// retirement note is written for a file that already exists rather than for
+/// new advice.
+#[must_use]
+pub fn retired_key_names() -> Vec<&'static str> {
+    RETIRED_KEYS.iter().map(|(key, _)| *key).collect()
+}
+
 /// Return the retired key a parse failure names, with its migration note.
 ///
 /// A rendered TOML error quotes the operator's own source line above its

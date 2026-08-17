@@ -62,26 +62,63 @@ fn run(args: &[&str], current_dir: &Path, home: &Path) -> Output {
         .expect("run docker_maid")
 }
 
+/// Read the `skills` array out of an `init --json` document.
+///
+/// The document is the only surface that says where every file went, so the
+/// tests read it rather than a hardcoded list. A skill added later is covered
+/// without touching this file.
+fn installed_skills(stdout: &[u8]) -> Vec<(String, String, PathBuf)> {
+    let document: Value = serde_json::from_slice(stdout).expect("init document parses as JSON");
+    let skills = document["skills"]
+        .as_array()
+        .expect("the init document lists its skills")
+        .iter()
+        .map(|entry| {
+            (
+                entry["name"].as_str().expect("skill name").to_owned(),
+                entry["status"].as_str().expect("skill status").to_owned(),
+                PathBuf::from(entry["path"].as_str().expect("skill path")),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        skills.len() >= 2,
+        "this build should install more than one skill: {document}"
+    );
+    skills
+}
+
 #[test]
-fn installing_writes_the_skill_under_the_chosen_harness() {
+fn installing_writes_every_skill_under_the_chosen_harness() {
     let directory = DirectoryGuard::new("harness");
     let root = directory.path();
     let home = root.join("home");
     fs::create_dir_all(&home).expect("create the fake home");
-    let output = run(&["init", "--agents", "--target", "claude"], root, &home);
+    let output = run(
+        &["--json", "init", "--agents", "--target", "claude"],
+        root,
+        &home,
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let installed = home.join(".claude/skills/docker-maid/SKILL.md");
-    let document = fs::read_to_string(&installed).expect("the skill was installed");
-    assert!(
-        document.starts_with("---\n"),
-        "the skill needs front matter"
-    );
-    assert!(document.contains("name: docker-maid"));
+    for (name, status, path) in installed_skills(&output.stdout) {
+        assert_eq!(status, "written", "{name} was not written");
+        assert_eq!(
+            path,
+            home.join(".claude/skills").join(&name).join("SKILL.md"),
+            "{name} landed outside its own directory"
+        );
+        let document = fs::read_to_string(&path).expect("the skill was installed");
+        assert!(document.starts_with("---\n"), "{name} needs front matter");
+        assert!(
+            document.contains(&format!("name: {name}")),
+            "{name} does not name itself after its directory"
+        );
+    }
 }
 
 #[test]
@@ -105,6 +142,9 @@ fn installing_never_reads_or_writes_the_configuration_file() {
         "the configuration file was modified"
     );
     assert!(home.join(".codex/skills/docker-maid/SKILL.md").exists());
+    assert!(home
+        .join(".codex/skills/docker-maid-config/SKILL.md")
+        .exists());
 }
 
 #[test]
@@ -134,10 +174,142 @@ fn the_machine_document_reports_where_the_skill_went() {
     assert_eq!(document["command"], "init");
     assert_eq!(document["mode"], "agents");
     assert_eq!(document["target"], "generic");
+    // The flat fields kept their v0.1 meaning when a second skill was added, so
+    // a caller written against version 1 still reads what it always read.
     assert_eq!(document["status"], "written");
     let path = document["path"].as_str().expect("path string");
     assert_eq!(Path::new(path), dest.join("docker-maid/SKILL.md"));
     assert!(Path::new(path).exists());
+
+    // The array is the complete list, and its first entry is what the flat
+    // fields describe.
+    let skills = installed_skills(&output.stdout);
+    assert_eq!(skills[0].0, "docker-maid");
+    assert_eq!(skills[0].1, document["status"]);
+    assert_eq!(skills[0].2, Path::new(path));
+    for (name, status, path) in &skills {
+        assert_eq!(status, "written", "{name} was not written");
+        assert_eq!(path, &dest.join(name).join("SKILL.md"));
+        assert!(path.exists(), "{name} was reported but not written");
+    }
+}
+
+#[test]
+fn one_named_skill_installs_alone_and_an_unknown_name_is_refused() {
+    // Selecting one skill is how an operator who wants only the policy half
+    // gets it. An unknown name must name the real set rather than install
+    // nothing and report success.
+    let directory = DirectoryGuard::new("select");
+    let root = directory.path();
+    let home = root.join("home");
+    let dest = root.join("skills");
+    fs::create_dir_all(&home).expect("create the fake home");
+    let destination = dest.to_str().expect("UTF-8 destination");
+
+    let output = run(
+        &[
+            "--json",
+            "init",
+            "--agents",
+            "--target",
+            "generic",
+            "--dest",
+            destination,
+            "--skill",
+            "docker-maid-config",
+        ],
+        root,
+        &home,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("init document");
+    let skills = document["skills"].as_array().expect("skills array");
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0]["name"], "docker-maid-config");
+    // With one skill selected it is the only one installed, so the flat fields
+    // describe it.
+    assert_eq!(document["path"], skills[0]["path"]);
+    assert_eq!(document["status"], skills[0]["status"]);
+    assert!(dest.join("docker-maid-config/SKILL.md").exists());
+    assert!(
+        !dest.join("docker-maid").exists(),
+        "an unselected skill was installed anyway"
+    );
+
+    let refused = run(
+        &[
+            "--json",
+            "init",
+            "--agents",
+            "--target",
+            "generic",
+            "--dest",
+            destination,
+            "--skill",
+            "docker-maid-tui",
+        ],
+        root,
+        &home,
+    );
+    assert_eq!(refused.status.code(), Some(64));
+    assert!(refused.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&refused.stderr).expect("error document");
+    assert_eq!(error["error"]["kind"], "usage");
+    let message = error["error"]["message"].as_str().expect("message");
+    assert!(
+        message.contains("docker-maid-config"),
+        "the refusal should list the real skills: {message}"
+    );
+}
+
+#[test]
+fn a_refusal_on_one_skill_installs_none_of_them() {
+    // With more than one file to write, a refusal on the second must not leave
+    // the first behind. A caller cannot undo what it cannot see.
+    let directory = DirectoryGuard::new("atomic");
+    let root = directory.path();
+    let home = root.join("home");
+    let dest = root.join("skills");
+    fs::create_dir_all(&home).expect("create the fake home");
+    let destination = dest.to_str().expect("UTF-8 destination");
+    let arguments = [
+        "--json",
+        "init",
+        "--agents",
+        "--target",
+        "generic",
+        "--dest",
+        destination,
+    ];
+
+    // Put a different document where the second skill would go, and remove the
+    // first so its absence afterwards is proof rather than coincidence.
+    let blocked = dest.join("docker-maid-config/SKILL.md");
+    fs::create_dir_all(blocked.parent().expect("parent")).expect("create the blocking directory");
+    fs::write(&blocked, "---\nname: mine\n---\nlocal edit\n").expect("write a different skill");
+
+    let refused = run(&arguments, root, &home);
+    assert_eq!(refused.status.code(), Some(64));
+    assert!(refused.stdout.is_empty());
+    assert!(
+        !dest.join("docker-maid").exists(),
+        "the first skill was written despite the refusal"
+    );
+    assert!(fs::read_to_string(&blocked)
+        .expect("read back")
+        .contains("local edit"));
+
+    // --force takes both, which is the only way past it.
+    let mut forced = arguments.to_vec();
+    forced.push("--force");
+    let output = run(&forced, root, &home);
+    assert_eq!(output.status.code(), Some(0));
+    let statuses = installed_skills(&output.stdout)
+        .into_iter()
+        .map(|(name, status, _)| (name, status))
+        .collect::<Vec<_>>();
+    assert!(statuses.contains(&("docker-maid".to_owned(), "written".to_owned())));
+    assert!(statuses.contains(&("docker-maid-config".to_owned(), "replaced".to_owned())));
 }
 
 #[test]
@@ -219,33 +391,30 @@ fn the_command_refuses_to_guess_what_to_install_or_where() {
 }
 
 #[test]
-fn the_installed_skill_matches_the_command_surface_of_this_build() {
-    // The skill is only worth installing if every command it teaches exists.
-    // Ask the binary itself rather than trusting a list written by hand.
+fn every_installed_skill_matches_the_command_surface_of_this_build() {
+    // A skill is only worth installing if every command it teaches exists.
+    // Ask the binary itself rather than trusting a list written by hand, and
+    // walk the documents the install actually reported so a skill added later
+    // cannot slip past this guard.
     let directory = DirectoryGuard::new("surface");
     let root = directory.path();
     let home = root.join("home");
     let dest = root.join("skills");
     fs::create_dir_all(&home).expect("create the fake home");
-    assert_eq!(
-        run(
-            &[
-                "init",
-                "--agents",
-                "--target",
-                "generic",
-                "--dest",
-                dest.to_str().expect("UTF-8 destination"),
-            ],
-            root,
-            &home,
-        )
-        .status
-        .code(),
-        Some(0)
+    let output = run(
+        &[
+            "--json",
+            "init",
+            "--agents",
+            "--target",
+            "generic",
+            "--dest",
+            dest.to_str().expect("UTF-8 destination"),
+        ],
+        root,
+        &home,
     );
-    let document =
-        fs::read_to_string(dest.join("docker-maid/SKILL.md")).expect("read the installed skill");
+    assert_eq!(output.status.code(), Some(0));
 
     let help = String::from_utf8(run(&["--help"], root, &home).stdout).expect("UTF-8 help");
     let commands = help
@@ -261,24 +430,35 @@ fn the_installed_skill_matches_the_command_surface_of_this_build() {
         "could not read the command list: {help}"
     );
 
-    let mut inside_code = false;
-    for line in document.lines() {
-        if line.trim_start().starts_with("```") {
-            inside_code = !inside_code;
-            continue;
-        }
-        if !inside_code {
-            continue;
-        }
-        for tail in line.split("docker_maid ").skip(1) {
-            let Some(word) = tail.split_whitespace().find(|word| !word.starts_with("--")) else {
+    for (name, _, path) in installed_skills(&output.stdout) {
+        let document = fs::read_to_string(&path).expect("read the installed skill");
+        let mut inside_code = false;
+        let mut taught = 0_usize;
+        for line in document.lines() {
+            if line.trim_start().starts_with("```") {
+                inside_code = !inside_code;
                 continue;
-            };
-            let word = word.trim_end_matches(')');
-            assert!(
-                commands.iter().any(|command| command == word),
-                "the skill teaches `docker_maid {word}`, which this build does not offer"
-            );
+            }
+            if !inside_code {
+                continue;
+            }
+            for tail in line.split("docker_maid ").skip(1) {
+                let Some(word) = tail.split_whitespace().find(|word| !word.starts_with("--"))
+                else {
+                    continue;
+                };
+                let word = word.trim_end_matches(')');
+                taught += 1;
+                assert!(
+                    commands.iter().any(|command| command == word),
+                    "{name} teaches `docker_maid {word}`, which this build does not offer"
+                );
+            }
         }
+        assert!(
+            !inside_code,
+            "{name} has an unbalanced code fence, so this scan read prose as code"
+        );
+        assert!(taught > 0, "{name} shows no runnable example at all");
     }
 }

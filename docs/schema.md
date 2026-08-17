@@ -307,7 +307,7 @@ start, is `docker_unreachable` with exit `5`.
 
 ## Agent skill install document
 
-`init --agents --format json` returns where the portable agent skill went:
+`init --agents --format json` returns where each portable agent skill went:
 
 ```json
 {
@@ -316,7 +316,19 @@ start, is `docker_unreachable` with exit `5`.
   "mode": "agents",
   "target": "claude",
   "path": "/home/you/.claude/skills/docker-maid/SKILL.md",
-  "status": "written"
+  "status": "written",
+  "skills": [
+    {
+      "name": "docker-maid",
+      "path": "/home/you/.claude/skills/docker-maid/SKILL.md",
+      "status": "written"
+    },
+    {
+      "name": "docker-maid-config",
+      "path": "/home/you/.claude/skills/docker-maid-config/SKILL.md",
+      "status": "written"
+    }
+  ]
 }
 ```
 
@@ -325,11 +337,23 @@ or `generic`. `status` is `written` for a fresh install, `unchanged` when the
 same document was already there, and `replaced` when `--force` overwrote a
 different one.
 
-The command writes exactly one file and reads no configuration, so an operator's
-policy is never touched. A missing `--agents`, a missing `--target`, a
-`generic` target with no `--dest`, and an existing different skill without
-`--force` are all `usage` errors with exit `64`. A skill that cannot be written
-is `state_io` with exit `6`.
+`skills` is the complete list. Each entry has a `name`, which is also its
+directory, a `path`, and its own `status`. The top-level `path` and `status`
+describe the first entry and keep the meaning they had when this command
+installed one file, so a caller written against schema version 1 reads the same
+values it always read.
+
+`--skill <name>` installs a subset; the default is every skill. When one skill
+is selected it is the only one installed, so the top-level fields describe it.
+
+The command reads no configuration, so an operator's policy is never touched.
+Every skill is written or none is: paths and overwrites are all checked before
+the first file is written.
+
+A missing `--agents`, a missing `--target`, a `generic` target with no `--dest`,
+an unknown `--skill` name, and an existing different skill without `--force` are
+all `usage` errors with exit `64`. A skill that cannot be written is `state_io`
+with exit `6`.
 
 `--version --format json` returns `command: "version"` and `version`.
 
