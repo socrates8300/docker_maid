@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn the_container_carries_exactly_the_stamp() {
         // If spawn wrote its own labels the survey would see a family the
-        // `labels` table never advertised, which is the drift this vertical
+        // `labels` table never advertised, which is the drift this contract
         // exists to prevent.
         let request = request(None);
         let body = request.container_body();

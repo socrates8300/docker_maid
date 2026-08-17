@@ -1559,10 +1559,10 @@ mod tests {
 
     #[test]
     fn every_advertised_label_key_is_adopted_by_the_survey() {
-        // The vertical's promise is that `labels`, is_agent_label, and the
-        // survey cannot disagree. Walk the published vocabulary and prove each
-        // key really does produce an adoptable candidate, so a key can never be
-        // advertised to an agent while the policy engine ignores it.
+        // The contract is that `labels`, is_agent_label, and the survey cannot
+        // disagree. Walk the published vocabulary and prove each key really
+        // does produce an adoptable candidate, so a key can never be advertised
+        // to an agent while the policy engine ignores it.
         for entry in labels::VOCABULARY {
             let key = sample_key(entry);
             let inventory = vec![item(
