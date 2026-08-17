@@ -1,7 +1,9 @@
 use bollard::models::{
     ContainerCreateBody, EndpointSettings, NetworkCreateRequest, NetworkingConfig,
 };
-use bollard::query_parameters::{CreateContainerOptionsBuilder, RemoveContainerOptionsBuilder};
+use bollard::query_parameters::{
+    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
+};
 use bollard::Docker;
 use docker_maid::config::{load_config, Config};
 use docker_maid::executor::{execute_plan, ExecutionReport, TargetStatus};
@@ -9,6 +11,7 @@ use docker_maid::inventory::collect_inventory;
 use docker_maid::observation::ObservationState;
 use docker_maid::plan::{build_plan_with_context, Action, Plan, PlanContext, ResourceKind};
 use docker_maid::state::{ProtectionKind, ProtectionStore, StatePaths};
+use futures_util::TryStreamExt;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -99,14 +102,39 @@ async fn create_network(docker: &Docker, name: &str, label: &str) {
         .expect("create live network");
 }
 
+/// The image the reference container runs.
+const REFERENCE_IMAGE: &str = "busybox:latest";
+
+/// Make sure the reference image exists before a container asks for it.
+///
+/// The suite used to assume this image was already cached, which holds on a
+/// developer machine that has used Docker before and fails on a fresh daemon.
+/// The gap surfaced only as a create-container error naming no image, so pull
+/// it here instead and let the suite run on any host. An already-present image
+/// is left alone, so a run with no network still works.
+async fn ensure_reference_image(docker: &Docker) {
+    if docker.inspect_image(REFERENCE_IMAGE).await.is_ok() {
+        return;
+    }
+    let options = CreateImageOptionsBuilder::default()
+        .from_image(REFERENCE_IMAGE)
+        .build();
+    docker
+        .create_image(Some(options), None, None)
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("pull the live reference image");
+}
+
 async fn create_network_reference(docker: &Docker, name: &str, network: &str) -> String {
+    ensure_reference_image(docker).await;
     let options = CreateContainerOptionsBuilder::default().name(name).build();
     let endpoints = HashMap::from([(network.to_owned(), EndpointSettings::default())]);
     docker
         .create_container(
             Some(options),
             ContainerCreateBody {
-                image: Some("busybox:latest".to_owned()),
+                image: Some(REFERENCE_IMAGE.to_owned()),
                 cmd: Some(vec!["true".to_owned()]),
                 networking_config: Some(NetworkingConfig {
                     endpoints_config: Some(endpoints),

@@ -2678,6 +2678,15 @@ mod tests {
             .is_empty());
 
         // A resource with no family label is refused with a pointer to `p`.
+        // The previous leg refreshed too, so restore the fixture here as well.
+        // Without this the assertion quietly depends on the ambient daemon
+        // holding at least one container: against an empty daemon the live plan
+        // carries only the built-in networks, no container survives the kind
+        // filter, and the action reports "No inventory object selected"
+        // instead of the message this leg is about.
+        app.plan = fixture_plan();
+        app.inventory_kind = ResourceKind::Container;
+        app.selected = 0;
         app.plan.decisions[0].resource.labels.clear();
         app.toggle_family_protection()
             .await
