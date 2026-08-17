@@ -41,6 +41,7 @@ Stable error kinds are:
 | Kind | Exit code | Meaning |
 |---|---:|---|
 | `config_invalid` | `3` | Configuration is missing, unreadable, or invalid |
+| `tty_required` | `4` | `tui` was asked for without a terminal on stdin and stdout |
 | `docker_unreachable` | `5` | Docker is unavailable or incompatible |
 | `state_io` | `6` | A file this tool manages cannot be used safely: protection, observation, or activity state, or an agent-skill install |
 | `partial_failure` | `2` | An applied pass skipped or failed at least one target |

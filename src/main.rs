@@ -1820,6 +1820,31 @@ fn display_path(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// The published error table, compiled in so it cannot drift unnoticed.
+    const SCHEMA_DOCUMENT: &str = include_str!("../docs/schema.md");
+
+    #[test]
+    fn every_error_kind_this_build_returns_is_documented_with_its_code() {
+        // `tty_required` shipped in v0.1 and was missing from this table, so an
+        // agent handling exit codes from the documentation alone could not
+        // learn what `4` meant. Ask the binary rather than trusting prose.
+        for (kind, code) in [
+            ("partial_failure", EXIT_PARTIAL),
+            ("config_invalid", EXIT_CONFIG),
+            ("tty_required", EXIT_TTY),
+            ("docker_unreachable", EXIT_DOCKER),
+            ("state_io", EXIT_STATE),
+            ("internal", EXIT_INTERNAL),
+            ("usage", EXIT_USAGE),
+        ] {
+            let row = format!("| `{kind}` | `{code}` |");
+            assert!(
+                SCHEMA_DOCUMENT.contains(&row),
+                "docs/schema.md has no row `{row}` for the kind this build returns"
+            );
+        }
+    }
+
     #[test]
     fn broken_pipe_is_success() {
         let error = io::Error::from(io::ErrorKind::BrokenPipe);

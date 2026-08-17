@@ -12,7 +12,6 @@ pub const DEFAULT_CONFIG: &str = r#"# docker_maid configuration
 
 # [defaults]
 # interval = "5m"       # quiet-host backstop; Docker events also wake a pass
-# log_level = "info"
 
 # [protect]
 # names = ["^postgres-prod$"]
@@ -45,14 +44,8 @@ pub const DEFAULT_CONFIG: &str = r#"# docker_maid configuration
 # max_bytes = 21474836480
 # allow_unscoped = true
 
-# [report]
-# enabled = true
-# path = "~/.local/state/docker_maid/report.json"
-# keep = 30
-
 # [tui]
 # refresh = "5m"
-# mouse = false
 "#;
 
 /// Configuration keys this build has retired, each with its migration.
@@ -61,11 +54,28 @@ pub const DEFAULT_CONFIG: &str = r#"# docker_maid configuration
 /// schema rejects it as unknown like any other stray key. Naming the
 /// retirement turns that generic failure into an instruction the operator can
 /// act on without reading a changelog.
-const RETIRED_KEYS: &[(&str, &str)] = &[(
-    "adopt",
-    "this was a container rule key; a rule match already means the resource \
-     is owned, so it never changed a decision. Delete the line",
-)];
+const RETIRED_KEYS: &[(&str, &str)] = &[
+    (
+        "adopt",
+        "this was a container rule key; a rule match already means the resource \
+         is owned, so it never changed a decision. Delete the line",
+    ),
+    (
+        "report",
+        "this table promised a report file that nothing ever wrote. It parsed \
+         and was then ignored, so enabling it changed nothing. Delete the table",
+    ),
+    (
+        "log_level",
+        "this was a `defaults` key that nothing ever read; this tool does not \
+         have a configurable log level. Delete the line",
+    ),
+    (
+        "mouse",
+        "this was a `tui` key that nothing ever read; the dashboard is driven \
+         by the keyboard. Delete the line",
+    ),
+];
 
 /// Return the retired key a parse failure names, with its migration note.
 ///
@@ -163,8 +173,6 @@ pub struct Config {
     pub protect: Protection,
     #[serde(skip_serializing_if = "Rules::is_empty")]
     pub rules: Rules,
-    #[serde(skip_serializing_if = "Report::is_empty")]
-    pub report: Report,
     #[serde(skip_serializing_if = "Tui::is_empty")]
     pub tui: Tui,
 }
@@ -301,13 +309,11 @@ impl Config {
 pub struct Defaults {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interval: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub log_level: Option<String>,
 }
 
 impl Defaults {
     fn is_empty(&self) -> bool {
-        self.interval.is_none() && self.log_level.is_none()
+        self.interval.is_none()
     }
 }
 
@@ -457,31 +463,14 @@ pub struct BuildCacheRule {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct Report {
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub keep: Option<u32>,
-}
-
-impl Report {
-    fn is_empty(&self) -> bool {
-        !self.enabled && self.path.is_none() && self.keep.is_none()
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
 pub struct Tui {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh: Option<String>,
-    pub mouse: bool,
 }
 
 impl Tui {
     fn is_empty(&self) -> bool {
-        self.refresh.is_none() && !self.mouse
+        self.refresh.is_none()
     }
 }
 
@@ -711,6 +700,57 @@ mod tests {
         assert!(message.contains("retired key `adopt`:"));
         assert!(message.contains("a rule match already means the resource is owned"));
         assert!(message.contains("Delete the line"));
+    }
+
+    #[test]
+    fn every_key_nothing_reads_is_refused_and_names_its_migration() {
+        // These three parsed and validated for the whole of v0.1 and were then
+        // ignored, so an operator who set them got silence instead of an
+        // effect. Silence is the worst outcome: refusing beats accepting a
+        // key whose only behaviour is to do nothing.
+        for (source, key, phrase) in [
+            (
+                "[report]\nenabled = true\npath = \"/tmp/r.json\"\nkeep = 30\n",
+                "report",
+                "promised a report file that nothing ever wrote",
+            ),
+            (
+                "[defaults]\nlog_level = \"info\"\n",
+                "log_level",
+                "does not have a configurable log level",
+            ),
+            ("[tui]\nmouse = false\n", "mouse", "driven by the keyboard"),
+        ] {
+            let error = Config::parse(source, Path::new("legacy.toml"))
+                .expect_err("a key nothing reads must be refused, not ignored");
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("unknown field `{key}`")),
+                "{key}: {message}"
+            );
+            assert!(
+                message.contains(&format!("retired key `{key}`:")),
+                "{key}: {message}"
+            );
+            assert!(message.contains(phrase), "{key}: {message}");
+        }
+    }
+
+    #[test]
+    fn the_starter_never_advertises_a_key_this_build_would_refuse() {
+        // `config default` is the file an operator or an agent copies from. A
+        // commented key it cannot uncomment is a trap, so the starter and the
+        // retirement list must never overlap.
+        for (key, _) in RETIRED_KEYS {
+            assert!(
+                !DEFAULT_CONFIG.contains(&format!("{key} =")),
+                "the starter still offers the retired key `{key}`"
+            );
+            assert!(
+                !DEFAULT_CONFIG.contains(&format!("[{key}]")),
+                "the starter still offers the retired table `{key}`"
+            );
+        }
     }
 
     #[test]
