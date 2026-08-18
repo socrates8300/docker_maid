@@ -1,4 +1,13 @@
 //! Interactive terminal frontend over the shared inventory, policy, state, and executor core.
+//!
+//! The interface answers one question a Docker GUI cannot: what would this
+//! policy remove, and why. `Review` is that answer, `Keeping` is its complement
+//! and the place protection is applied, and `Setup` is the guided configurator.
+//!
+//! Two rules hold everywhere in this module. Colour never carries meaning on
+//! its own, so every coloured row also sits under a heading that says the same
+//! thing in words. And the footer is generated from the same table the key
+//! handler reads, so it cannot advertise a key that does nothing.
 
 use super::{epoch_seconds, load_selected_config, RunError, RunOutcome};
 use crossterm::cursor::{Hide, Show};
@@ -29,11 +38,10 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Sparkline, Table,
-    TableState, Tabs, Wrap,
+    Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
 };
 use ratatui::{Frame, Terminal};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
@@ -41,41 +49,41 @@ use std::time::Duration;
 
 type CrosstermTerminal = Terminal<CrosstermBackend<Stdout>>;
 
+/// The narrowest terminal this interface will draw into.
+const MIN_WIDTH: u16 = 60;
+/// The shortest terminal this interface will draw into.
+const MIN_HEIGHT: u16 = 20;
+
+/// Would be removed. This colour means nothing else anywhere in the interface.
+const REMOVE_COLOR: Color = Color::Red;
+/// Protected. This colour means nothing else anywhere in the interface.
+const PROTECT_COLOR: Color = Color::Green;
+/// Needs a human decision: an unscoped authorization, or a warning.
+const ATTENTION_COLOR: Color = Color::Yellow;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
-    Dashboard,
-    Inventory,
-    Plan,
-    Activity,
-    Configure,
+    Review,
+    Keeping,
+    Setup,
 }
 
 impl View {
-    const ALL: [Self; 5] = [
-        Self::Dashboard,
-        Self::Inventory,
-        Self::Plan,
-        Self::Activity,
-        Self::Configure,
-    ];
+    const ALL: [Self; 3] = [Self::Review, Self::Keeping, Self::Setup];
 
-    fn index(self) -> usize {
+    const fn index(self) -> usize {
         match self {
-            Self::Dashboard => 0,
-            Self::Inventory => 1,
-            Self::Plan => 2,
-            Self::Activity => 3,
-            Self::Configure => 4,
+            Self::Review => 0,
+            Self::Keeping => 1,
+            Self::Setup => 2,
         }
     }
 
-    fn title(self) -> &'static str {
+    const fn title(self) -> &'static str {
         match self {
-            Self::Dashboard => "Dashboard",
-            Self::Inventory => "Inventory",
-            Self::Plan => "Plan",
-            Self::Activity => "Activity",
-            Self::Configure => "Configure",
+            Self::Review => "Review",
+            Self::Keeping => "Keeping",
+            Self::Setup => "Setup",
         }
     }
 }
@@ -84,6 +92,7 @@ impl View {
 enum Overlay {
     None,
     Help,
+    Activity,
     Confirm,
     CacheConfirm,
     ConfigSave,
@@ -132,6 +141,343 @@ impl PolicyField {
     }
 }
 
+/// What a key press means, decided before anything is executed.
+///
+/// Splitting the meaning from the effect is what lets one test prove that every
+/// key the footer advertises resolves to something, without running the effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Intent {
+    Quit,
+    Help,
+    Show(View),
+    ActivityLog,
+    Move(isize),
+    ScrollPreview(isize),
+    ToggleDetail,
+    StartFilter,
+    Protect,
+    ProtectFamily,
+    NamePrefix,
+    Apply,
+    Refresh,
+    CycleProfile(isize),
+    CyclePolicyField(isize),
+    EditPolicy,
+    ToggleCandidate,
+    PreviewProposal,
+    SaveProposal,
+}
+
+/// One entry in a view's key table.
+///
+/// The footer prints the key codes themselves, so there is no second string to
+/// drift out of step with what the handler dispatches.
+struct KeyHint {
+    label: &'static str,
+    codes: &'static [KeyCode],
+}
+
+/// What one key is called on screen.
+fn key_symbol(code: KeyCode) -> String {
+    match code {
+        KeyCode::Enter => "enter".to_owned(),
+        KeyCode::Esc => "esc".to_owned(),
+        KeyCode::Up => "↑".to_owned(),
+        KeyCode::Down => "↓".to_owned(),
+        KeyCode::Left => "←".to_owned(),
+        KeyCode::Right => "→".to_owned(),
+        KeyCode::PageUp => "pgup".to_owned(),
+        KeyCode::PageDown => "pgdn".to_owned(),
+        KeyCode::Char(' ') => "space".to_owned(),
+        KeyCode::Char(character) => character.to_string(),
+        other => format!("{other:?}").to_lowercase(),
+    }
+}
+
+/// The exact text the footer prints for one hint.
+fn hint_text(hint: &KeyHint) -> String {
+    let keys = hint
+        .codes
+        .iter()
+        .map(|code| key_symbol(*code))
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{keys} {}", hint.label)
+}
+
+const REVIEW_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "protect",
+        codes: &[KeyCode::Char(' ')],
+    },
+    KeyHint {
+        label: "apply",
+        codes: &[KeyCode::Char('a')],
+    },
+    KeyHint {
+        label: "details",
+        codes: &[KeyCode::Enter],
+    },
+    KeyHint {
+        label: "filter",
+        codes: &[KeyCode::Char('/')],
+    },
+    KeyHint {
+        label: "keeping",
+        codes: &[KeyCode::Char('2')],
+    },
+    KeyHint {
+        label: "log",
+        codes: &[KeyCode::Char('l')],
+    },
+    KeyHint {
+        label: "refresh",
+        codes: &[KeyCode::Char('r')],
+    },
+    KeyHint {
+        label: "help",
+        codes: &[KeyCode::Char('?')],
+    },
+    KeyHint {
+        label: "quit",
+        codes: &[KeyCode::Char('q')],
+    },
+];
+
+const KEEPING_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "protect",
+        codes: &[KeyCode::Char(' ')],
+    },
+    KeyHint {
+        label: "protect family",
+        codes: &[KeyCode::Char('P')],
+    },
+    KeyHint {
+        label: "details",
+        codes: &[KeyCode::Enter],
+    },
+    KeyHint {
+        label: "filter",
+        codes: &[KeyCode::Char('/')],
+    },
+    KeyHint {
+        label: "review",
+        codes: &[KeyCode::Char('1')],
+    },
+    KeyHint {
+        label: "log",
+        codes: &[KeyCode::Char('l')],
+    },
+    KeyHint {
+        label: "help",
+        codes: &[KeyCode::Char('?')],
+    },
+    KeyHint {
+        label: "quit",
+        codes: &[KeyCode::Char('q')],
+    },
+];
+
+const SETUP_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "use this",
+        codes: &[KeyCode::Char(' ')],
+    },
+    KeyHint {
+        label: "profile",
+        codes: &[KeyCode::Left, KeyCode::Right],
+    },
+    KeyHint {
+        label: "field",
+        codes: &[KeyCode::Char('['), KeyCode::Char(']')],
+    },
+    KeyHint {
+        label: "edit",
+        codes: &[KeyCode::Char('e')],
+    },
+    KeyHint {
+        label: "preview",
+        codes: &[KeyCode::Char('v')],
+    },
+    KeyHint {
+        label: "save",
+        codes: &[KeyCode::Char('s')],
+    },
+    KeyHint {
+        label: "help",
+        codes: &[KeyCode::Char('?')],
+    },
+    KeyHint {
+        label: "quit",
+        codes: &[KeyCode::Char('q')],
+    },
+];
+
+const EDITOR_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "save",
+        codes: &[KeyCode::Enter],
+    },
+    KeyHint {
+        label: "cancel",
+        codes: &[KeyCode::Esc],
+    },
+];
+
+const HELP_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "scroll",
+        codes: &[KeyCode::Up, KeyCode::Down],
+    },
+    KeyHint {
+        label: "close",
+        codes: &[KeyCode::Esc],
+    },
+];
+
+const ACTIVITY_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "scroll",
+        codes: &[KeyCode::Up, KeyCode::Down],
+    },
+    KeyHint {
+        label: "close",
+        codes: &[KeyCode::Esc],
+    },
+];
+
+const CONFIRM_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "apply",
+        codes: &[KeyCode::Enter],
+    },
+    KeyHint {
+        label: "scroll",
+        codes: &[KeyCode::Up, KeyCode::Down],
+    },
+    KeyHint {
+        label: "cancel",
+        codes: &[KeyCode::Esc],
+    },
+];
+
+const YES_NO_HINTS: &[KeyHint] = &[
+    KeyHint {
+        label: "yes",
+        codes: &[KeyCode::Char('y'), KeyCode::Enter],
+    },
+    KeyHint {
+        label: "cancel",
+        codes: &[KeyCode::Esc],
+    },
+];
+
+/// The one key table both the footer and the key handler agree on.
+const fn hints_for(view: View, editor: Editor, overlay: Overlay) -> &'static [KeyHint] {
+    if !matches!(editor, Editor::None) {
+        return EDITOR_HINTS;
+    }
+    match overlay {
+        Overlay::Help => HELP_HINTS,
+        Overlay::Activity => ACTIVITY_HINTS,
+        Overlay::Confirm => CONFIRM_HINTS,
+        Overlay::CacheConfirm | Overlay::ConfigSave => YES_NO_HINTS,
+        Overlay::None => match view {
+            View::Review => REVIEW_HINTS,
+            View::Keeping => KEEPING_HINTS,
+            View::Setup => SETUP_HINTS,
+        },
+    }
+}
+
+/// Resolve a key press against the current view, or report that this view has
+/// no meaning for it.
+fn intent_for(view: View, key: KeyEvent) -> Option<Intent> {
+    if let Some(intent) = global_intent(key) {
+        return Some(intent);
+    }
+    match view {
+        View::Review => review_intent(key),
+        View::Keeping => keeping_intent(key),
+        View::Setup => setup_intent(key),
+    }
+}
+
+fn global_intent(key: KeyEvent) -> Option<Intent> {
+    Some(match key.code {
+        KeyCode::Char('q') => Intent::Quit,
+        KeyCode::Char('?') => Intent::Help,
+        KeyCode::Char('1') => Intent::Show(View::Review),
+        KeyCode::Char('2') => Intent::Show(View::Keeping),
+        KeyCode::Char('3') => Intent::Show(View::Setup),
+        KeyCode::Char('l') => Intent::ActivityLog,
+        KeyCode::Char('r') => Intent::Refresh,
+        KeyCode::Down | KeyCode::Char('j') => Intent::Move(1),
+        KeyCode::Up | KeyCode::Char('k') => Intent::Move(-1),
+        _ => return None,
+    })
+}
+
+fn review_intent(key: KeyEvent) -> Option<Intent> {
+    Some(match key.code {
+        KeyCode::Char(' ') => Intent::Protect,
+        KeyCode::Char('P') => Intent::ProtectFamily,
+        KeyCode::Char('c') => Intent::NamePrefix,
+        KeyCode::Enter => Intent::ToggleDetail,
+        KeyCode::Char('/') => Intent::StartFilter,
+        KeyCode::Char('a') => Intent::Apply,
+        KeyCode::PageDown => Intent::Move(10),
+        KeyCode::PageUp => Intent::Move(-10),
+        _ => return None,
+    })
+}
+
+fn keeping_intent(key: KeyEvent) -> Option<Intent> {
+    Some(match key.code {
+        KeyCode::Char(' ') => Intent::Protect,
+        KeyCode::Char('P') => Intent::ProtectFamily,
+        KeyCode::Char('c') => Intent::NamePrefix,
+        KeyCode::Enter => Intent::ToggleDetail,
+        KeyCode::Char('/') => Intent::StartFilter,
+        KeyCode::PageDown => Intent::Move(10),
+        KeyCode::PageUp => Intent::Move(-10),
+        _ => return None,
+    })
+}
+
+fn setup_intent(key: KeyEvent) -> Option<Intent> {
+    Some(match key.code {
+        // `enter` deliberately has no meaning here. It opens the details pane
+        // in the other two views, and one key with two jobs is the defect this
+        // interface exists to remove.
+        KeyCode::Char(' ') => Intent::ToggleCandidate,
+        KeyCode::Left => Intent::CycleProfile(-1),
+        KeyCode::Right => Intent::CycleProfile(1),
+        KeyCode::Char('[') => Intent::CyclePolicyField(-1),
+        KeyCode::Char(']') => Intent::CyclePolicyField(1),
+        KeyCode::Char('e') => Intent::EditPolicy,
+        KeyCode::Char('v') => Intent::PreviewProposal,
+        KeyCode::Char('s') => Intent::SaveProposal,
+        KeyCode::PageDown => Intent::ScrollPreview(3),
+        KeyCode::PageUp => Intent::ScrollPreview(-3),
+        _ => return None,
+    })
+}
+
+/// The interface word for a disposition.
+///
+/// The taxonomy stays exactly as it is in `Disposition`, its `Display`, and
+/// every machine document. Only what a person reads on screen changes.
+const fn plain_disposition(disposition: Disposition) -> &'static str {
+    match disposition {
+        Disposition::Protected => "you protected this",
+        Disposition::Owned => "a rule covers this",
+        Disposition::AuthorizedUnscoped => "you authorized this without a rule",
+        Disposition::Unowned => "no rule covers this",
+    }
+}
+
 struct App {
     explicit_config: Option<PathBuf>,
     loaded: LoadedConfig,
@@ -145,15 +491,14 @@ struct App {
     plan_validity: PlanValidity,
     history: Vec<CompletedPass>,
     view: View,
-    inventory_kind: ResourceKind,
     selected: usize,
     filter: String,
     editor: Editor,
-    detail_focused: bool,
+    detail_open: bool,
     overlay: Overlay,
     confirm_scroll: usize,
-    activity_scroll: u16,
-    rules_scroll: u16,
+    overlay_scroll: u16,
+    pane_scroll: u16,
     survey: ConfiguratorSurvey,
     protection: ProtectionState,
     observations: ObservationState,
@@ -164,6 +509,7 @@ struct App {
     policy_field: usize,
     config_proposal: Option<ConfigProposal>,
     prefix_input: String,
+    prefix_kind: ResourceKind,
     status: String,
 }
 
@@ -256,19 +602,18 @@ impl App {
             plan_validity,
             history,
             view: if built_in_config {
-                View::Configure
+                View::Setup
             } else {
-                View::Dashboard
+                View::Review
             },
-            inventory_kind: ResourceKind::Container,
             selected: 0,
             filter: String::new(),
             editor: Editor::None,
-            detail_focused: false,
+            detail_open: false,
             overlay: Overlay::None,
             confirm_scroll: 0,
-            activity_scroll: 0,
-            rules_scroll: 0,
+            overlay_scroll: 0,
+            pane_scroll: 0,
             survey,
             observations,
             configure_selected,
@@ -278,6 +623,7 @@ impl App {
             policy_field: 0,
             config_proposal: None,
             prefix_input: String::new(),
+            prefix_kind: ResourceKind::Container,
             status,
         })
     }
@@ -357,13 +703,13 @@ impl App {
             .unwrap_or_else(|| first_configure_row(&self.survey));
         self.clamp_selection();
         self.status = format!(
-            "Refreshed: {} resources, {} pending removals",
-            self.plan.decisions.len(),
-            self.plan.pending_count()
+            "Refreshed: {} would be removed, {} kept",
+            self.plan.pending_count(),
+            self.plan.decisions.len() - self.plan.pending_count()
         );
         if self.loaded.config.rules.build_cache.is_some() {
             self.status
-                .push_str(" • WARNING: build cache is authorized-unscoped");
+                .push_str(" • build cache is authorized without ownership evidence");
         }
         Ok(())
     }
@@ -372,28 +718,15 @@ impl App {
         let history = ActivityJournal::new(self.state_paths.clone()).completed_passes()?;
         if history != self.history {
             self.history = history;
-            replace_status(&mut self.status, "Activity history updated");
+            replace_status(&mut self.status, "Activity log updated");
         }
         Ok(())
     }
 
-    fn filtered_inventory(&self) -> Vec<&Decision> {
-        self.plan
-            .decisions
-            .iter()
-            .filter(|decision| decision.resource.kind == self.inventory_kind)
-            .filter(|decision| {
-                self.filter.is_empty()
-                    || fuzzy_match(&decision.resource.name, &self.filter)
-                    || fuzzy_match(&decision.resource.id, &self.filter)
-                    || decision
-                        .matched_rule
-                        .as_deref()
-                        .is_some_and(|rule| fuzzy_match(rule, &self.filter))
-            })
-            .collect()
-    }
-
+    /// Every removal in the plan, in plan order and never filtered.
+    ///
+    /// This is what the confirmation modal and the executor act on. A filter is
+    /// a reading aid and must never narrow the set a person confirms.
     fn plan_targets(&self) -> Vec<&Decision> {
         self.plan
             .decisions
@@ -402,41 +735,71 @@ impl App {
             .collect()
     }
 
-    fn selected_inventory(&self) -> Option<&Decision> {
-        self.filtered_inventory().get(self.selected).copied()
+    /// The rows `Review` lists: removals, narrowed by the active filter.
+    fn review_rows(&self) -> Vec<&Decision> {
+        self.plan
+            .decisions
+            .iter()
+            .filter(|decision| decision.action == Action::Remove)
+            .filter(|decision| self.matches_filter(decision))
+            .collect()
+    }
+
+    /// The rows `Keeping` lists: everything the plan keeps, narrowed by the
+    /// active filter.
+    fn keeping_rows(&self) -> Vec<&Decision> {
+        self.plan
+            .decisions
+            .iter()
+            .filter(|decision| decision.action == Action::Keep)
+            .filter(|decision| self.matches_filter(decision))
+            .collect()
+    }
+
+    fn matches_filter(&self, decision: &Decision) -> bool {
+        self.filter.is_empty()
+            || fuzzy_match(&decision.resource.name, &self.filter)
+            || fuzzy_match(&decision.resource.id, &self.filter)
+            || decision
+                .matched_rule
+                .as_deref()
+                .is_some_and(|rule| fuzzy_match(rule, &self.filter))
+    }
+
+    fn current_rows(&self) -> Vec<&Decision> {
+        match self.view {
+            View::Review => self.review_rows(),
+            View::Keeping => self.keeping_rows(),
+            View::Setup => Vec::new(),
+        }
+    }
+
+    fn selected_decision(&self) -> Option<&Decision> {
+        self.current_rows().get(self.selected).copied()
     }
 
     fn clamp_selection(&mut self) {
         let length = match self.view {
-            View::Inventory => self.filtered_inventory().len(),
-            View::Plan => self.plan_targets().len(),
-            View::Configure => self.survey.candidates.len(),
-            View::Dashboard | View::Activity => 0,
+            View::Review => self.review_rows().len(),
+            View::Keeping => self.keeping_rows().len(),
+            View::Setup => self.survey.candidates.len(),
         };
         self.selected = self.selected.min(length.saturating_sub(1));
     }
 
     fn move_selection(&mut self, delta: isize) {
         match self.view {
-            View::Inventory | View::Plan => {
-                let length = if self.view == View::Inventory {
-                    self.filtered_inventory().len()
-                } else {
-                    self.plan_targets().len()
-                };
+            View::Review | View::Keeping => {
+                let length = self.current_rows().len();
                 if length == 0 {
                     self.selected = 0;
                 } else {
                     self.selected = self.selected.saturating_add_signed(delta).min(length - 1);
                 }
             }
-            View::Activity => {
-                self.activity_scroll = move_scroll(self.activity_scroll, delta);
-            }
-            View::Configure => {
+            View::Setup => {
                 self.configure_row = move_configure_row(&self.survey, self.configure_row, delta);
             }
-            View::Dashboard => {}
         }
     }
 
@@ -580,7 +943,7 @@ impl App {
             context: self.plan_context(),
         })?;
         self.status = format!(
-            "Proposal {}: {} pending removals; press s to review save",
+            "Proposal {}: {} would be removed after save; press s to review",
             proposal.proposal_id, proposal.preview.after_pending
         );
         self.config_proposal = Some(proposal);
@@ -588,18 +951,18 @@ impl App {
     }
 
     fn start_prefix_editor(&mut self) {
-        let Some(decision) = self.selected_inventory() else {
-            replace_status(&mut self.status, "No inventory object selected");
+        let Some(decision) = self.selected_decision() else {
+            replace_status(&mut self.status, "Nothing is selected");
             return;
         };
         if decision.resource.kind == ResourceKind::BuildCache {
-            replace_status(
-                &mut self.status,
-                "Build cache has no name ownership surface",
-            );
+            replace_status(&mut self.status, "Build cache has no name to own");
             return;
         }
-        self.prefix_input = decision.resource.name.clone();
+        let kind = decision.resource.kind;
+        let name = decision.resource.name.clone();
+        self.prefix_kind = kind;
+        self.prefix_input = name;
         self.editor = Editor::Prefix;
         replace_status(
             &mut self.status,
@@ -608,7 +971,7 @@ impl App {
     }
 
     fn accept_prefix(&mut self) -> Result<(), RunError> {
-        let kind = self.inventory_kind;
+        let kind = self.prefix_kind;
         let inventory = self.inventory_snapshot();
         let id = add_name_prefix_candidate(
             &mut self.survey,
@@ -625,7 +988,7 @@ impl App {
             .unwrap_or(0);
         self.config_proposal = None;
         self.editor = Editor::None;
-        self.view = View::Configure;
+        self.view = View::Setup;
         self.status = format!("Added operator-approved prefix candidate {id}");
         Ok(())
     }
@@ -638,36 +1001,17 @@ impl App {
         let result = write_proposal(&proposal, &inventory)?;
         self.explicit_config = Some(result.path.clone());
         self.refresh().await?;
-        self.view = View::Plan;
+        self.view = View::Review;
         self.status = format!(
-            "Saved {} • reviewed plan refreshed • apply remains a separate confirmation",
+            "Saved {} • review refreshed • apply remains a separate confirmation",
             result.path.display()
         );
         Ok(())
     }
 
-    fn change_inventory_kind(&mut self, delta: isize) {
-        const KINDS: [ResourceKind; 5] = [
-            ResourceKind::Container,
-            ResourceKind::Image,
-            ResourceKind::Volume,
-            ResourceKind::Network,
-            ResourceKind::BuildCache,
-        ];
-        let current = KINDS
-            .iter()
-            .position(|kind| *kind == self.inventory_kind)
-            .unwrap_or(0);
-        let next = current
-            .saturating_add_signed(delta)
-            .min(KINDS.len().saturating_sub(1));
-        self.inventory_kind = KINDS[next];
-        self.selected = 0;
-    }
-
     async fn toggle_protection(&mut self) -> Result<(), RunError> {
-        let Some(decision) = self.selected_inventory().cloned() else {
-            replace_status(&mut self.status, "No inventory object selected");
+        let Some(decision) = self.selected_decision().cloned() else {
+            replace_status(&mut self.status, "Nothing is selected");
             return Ok(());
         };
         let Some(kind) = protection_kind(decision.resource.kind) else {
@@ -682,7 +1026,7 @@ impl App {
             let value = entry.value.clone();
             self.protection_store
                 .remove(kind, std::slice::from_ref(&value))?;
-            self.status = format!("Removed runtime protection: {kind} {value}");
+            self.status = format!("Removed protection: {kind} {value}");
         } else if decision.disposition == Disposition::Protected {
             self.status = format!(
                 "{} is protected by configuration; edit {} to remove it",
@@ -702,15 +1046,15 @@ impl App {
     /// Protect or release every resource sharing the selected object's
     /// ownership family through one typed runtime entry.
     async fn toggle_family_protection(&mut self) -> Result<(), RunError> {
-        let Some(decision) = self.selected_inventory().cloned() else {
-            replace_status(&mut self.status, "No inventory object selected");
+        let Some(decision) = self.selected_decision().cloned() else {
+            replace_status(&mut self.status, "Nothing is selected");
             return Ok(());
         };
         let Some((key, value)) = family_label(&decision.resource) else {
             replace_status(
                 &mut self.status,
                 &format!(
-                    "{} carries no Compose or agent family label; press p to protect it by ID",
+                    "{} carries no Compose or agent family label; press space to protect it alone",
                     decision.resource.name
                 ),
             );
@@ -726,7 +1070,7 @@ impl App {
         if held {
             self.protection_store
                 .remove(ProtectionKind::Label, std::slice::from_ref(&pair))?;
-            self.status = format!("Removed runtime protection: label {pair} ({members} objects)");
+            self.status = format!("Removed protection: label {pair} ({members} objects)");
         } else {
             self.protection_store
                 .add(ProtectionKind::Label, std::slice::from_ref(&pair))?;
@@ -744,7 +1088,7 @@ impl App {
             return Ok(());
         }
         if !self.plan.has_pending_removals() {
-            replace_status(&mut self.status, "No removals pending");
+            replace_status(&mut self.status, "Nothing would be removed");
             return Ok(());
         }
         if self.built_in_config {
@@ -888,7 +1232,7 @@ async fn run_event_loop(
         tokio::select! {
             _ = signals.terminate.recv() => break,
             _ = signals.interrupt.recv() => break,
-            _ = refresh.tick(), if matches!(app.overlay, Overlay::None | Overlay::Help) => {
+            _ = refresh.tick(), if matches!(app.overlay, Overlay::None | Overlay::Help | Overlay::Activity) => {
                 if let Err(error) = app.refresh().await {
                     app.plan_validity = PlanValidity::Stale;
                     app.overlay = Overlay::None;
@@ -898,7 +1242,7 @@ async fn run_event_loop(
                 refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 refresh.tick().await;
             }
-            _ = activity.tick(), if matches!(app.overlay, Overlay::None | Overlay::Help) => {
+            _ = activity.tick(), if matches!(app.overlay, Overlay::None | Overlay::Help | Overlay::Activity) => {
                 if let Err(error) = app.refresh_activity() {
                     app.status = format!("Activity refresh failed: {}", super::run_error_message(&error));
                 }
@@ -967,76 +1311,56 @@ async fn handle_event(
 }
 
 async fn handle_main_key(app: &mut App, key: KeyEvent) -> Result<bool, RunError> {
-    match key.code {
-        KeyCode::Char('q') => return Ok(true),
-        KeyCode::Char('?') => app.overlay = Overlay::Help,
-        KeyCode::Char('1') => switch_view(app, View::Dashboard),
-        KeyCode::Char('2') => switch_view(app, View::Inventory),
-        KeyCode::Char('3') => switch_view(app, View::Plan),
-        KeyCode::Char('4') => switch_view(app, View::Activity),
-        KeyCode::Char('5') => switch_view(app, View::Configure),
-        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
-        KeyCode::Left | KeyCode::Char('h') if app.view == View::Inventory => {
-            app.change_inventory_kind(-1);
+    let Some(intent) = intent_for(app.view, key) else {
+        return Ok(false);
+    };
+    match intent {
+        Intent::Quit => return Ok(true),
+        Intent::Help => {
+            app.overlay_scroll = 0;
+            app.overlay = Overlay::Help;
         }
-        KeyCode::Right | KeyCode::Char('l') if app.view == View::Inventory => {
-            app.change_inventory_kind(1);
+        Intent::Show(view) => switch_view(app, view),
+        Intent::ActivityLog => {
+            app.overlay_scroll = 0;
+            app.overlay = Overlay::Activity;
         }
-        KeyCode::Left | KeyCode::Char('h') if app.view == View::Configure => {
-            app.cycle_profile(-1);
+        Intent::Move(delta) => app.move_selection(delta),
+        Intent::ScrollPreview(delta) => app.pane_scroll = move_scroll(app.pane_scroll, delta),
+        Intent::ToggleDetail => {
+            app.detail_open = !app.detail_open;
+            app.pane_scroll = 0;
         }
-        KeyCode::Right | KeyCode::Char('l') if app.view == View::Configure => {
-            app.cycle_profile(1);
-        }
-        KeyCode::Char('[') if app.view == View::Configure => app.cycle_policy_field(-1),
-        KeyCode::Char(']') if app.view == View::Configure => app.cycle_policy_field(1),
-        KeyCode::Char('e') if app.view == View::Configure => app.start_policy_editor(),
-        KeyCode::Char('/') if app.view == View::Inventory => {
+        Intent::StartFilter => {
             app.editor = Editor::Filter;
-            replace_status(
-                &mut app.status,
-                "Filter inventory; Enter accepts, Esc clears",
-            );
+            replace_status(&mut app.status, "Type to narrow; Enter accepts, Esc clears");
         }
-        KeyCode::Enter if app.view == View::Inventory => {
-            app.detail_focused = !app.detail_focused;
+        Intent::Protect => app.toggle_protection().await?,
+        Intent::ProtectFamily => app.toggle_family_protection().await?,
+        Intent::NamePrefix => app.start_prefix_editor(),
+        Intent::Apply => open_confirmation(app),
+        Intent::Refresh => {
+            if let Err(error) = app.refresh().await {
+                app.plan_validity = PlanValidity::Stale;
+                app.status = format!("Refresh failed: {}", super::run_error_message(&error));
+            }
         }
-        KeyCode::Char('P') if app.view == View::Inventory => {
-            app.toggle_family_protection().await?;
-        }
-        KeyCode::Char('p') if app.view == View::Inventory => {
-            app.toggle_protection().await?;
-        }
-        KeyCode::Char('c') if app.view == View::Inventory => app.start_prefix_editor(),
-        KeyCode::Enter | KeyCode::Char(' ') if app.view == View::Configure => {
-            app.toggle_selected_candidate();
-        }
-        KeyCode::Char('v') if app.view == View::Configure => {
+        Intent::CycleProfile(delta) => app.cycle_profile(delta),
+        Intent::CyclePolicyField(delta) => app.cycle_policy_field(delta),
+        Intent::EditPolicy => app.start_policy_editor(),
+        Intent::ToggleCandidate => app.toggle_selected_candidate(),
+        Intent::PreviewProposal => {
             if let Err(error) = app.preview_configuration() {
                 app.status = format!("Proposal blocked: {}", super::run_error_message(&error));
             }
         }
-        KeyCode::Char('s') if app.view == View::Configure => {
+        Intent::SaveProposal => {
             if app.config_proposal.is_some() {
                 app.overlay = Overlay::ConfigSave;
             } else {
                 replace_status(&mut app.status, "Preview the proposal with v before saving");
             }
         }
-        KeyCode::Char('a') if matches!(app.view, View::Inventory | View::Plan) => {
-            open_confirmation(app);
-        }
-        KeyCode::Char('y') if app.view == View::Plan => open_confirmation(app),
-        KeyCode::Char('r') => {
-            if let Err(error) = app.refresh().await {
-                app.plan_validity = PlanValidity::Stale;
-                app.status = format!("Refresh failed: {}", super::run_error_message(&error));
-            }
-        }
-        KeyCode::PageDown => app.move_selection(10),
-        KeyCode::PageUp => app.move_selection(-10),
-        _ => {}
     }
     Ok(false)
 }
@@ -1048,11 +1372,7 @@ async fn handle_overlay_key(
 ) -> Result<bool, RunError> {
     match app.overlay {
         Overlay::None => return Ok(false),
-        Overlay::Help => {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
-                app.overlay = Overlay::None;
-            }
-        }
+        Overlay::Help | Overlay::Activity => handle_scrolling_overlay_key(app, key),
         Overlay::Confirm => handle_plan_confirmation(terminal, app, key).await?,
         Overlay::CacheConfirm => match key.code {
             KeyCode::Esc | KeyCode::Char('n') => {
@@ -1067,7 +1387,7 @@ async fn handle_overlay_key(
                 app.overlay = Overlay::None;
                 replace_status(
                     &mut app.status,
-                    "Enabled authorized-unscoped build-cache proposal; preview before save",
+                    "Enabled a build-cache proposal with no ownership evidence; preview before save",
                 );
             }
             _ => {}
@@ -1094,6 +1414,45 @@ async fn handle_overlay_key(
     Ok(true)
 }
 
+/// How many lines the open overlay can scroll through.
+fn overlay_line_count(app: &App) -> usize {
+    match app.overlay {
+        Overlay::Activity => activity_lines(&app.history).len(),
+        Overlay::Help => HELP_ENTRIES.len() + 4,
+        _ => 0,
+    }
+}
+
+/// Scroll whichever overlay is open, clamped to the last line it actually has.
+///
+/// Without the clamp the pane scrolls off its own content and shows an empty
+/// box, which reads as "nothing here" rather than "you scrolled too far".
+fn handle_scrolling_overlay_key(app: &mut App, key: KeyEvent) {
+    let last = overlay_line_count(app)
+        .saturating_sub(1)
+        .try_into()
+        .unwrap_or(u16::MAX);
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('l' | 'q' | '?') => {
+            app.overlay = Overlay::None;
+            app.overlay_scroll = 0;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.overlay_scroll = move_scroll(app.overlay_scroll, 1).min(last);
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.overlay_scroll = move_scroll(app.overlay_scroll, -1);
+        }
+        KeyCode::PageDown => {
+            app.overlay_scroll = move_scroll(app.overlay_scroll, 10).min(last);
+        }
+        KeyCode::PageUp => {
+            app.overlay_scroll = move_scroll(app.overlay_scroll, -10);
+        }
+        _ => {}
+    }
+}
+
 async fn handle_plan_confirmation(
     terminal: &mut CrosstermTerminal,
     app: &mut App,
@@ -1102,11 +1461,11 @@ async fn handle_plan_confirmation(
     match key.code {
         KeyCode::Esc | KeyCode::Char('n') => {
             app.overlay = Overlay::None;
-            replace_status(&mut app.status, "Plan application cancelled");
+            replace_status(&mut app.status, "Apply cancelled");
         }
         KeyCode::Enter => {
             app.overlay = Overlay::None;
-            replace_status(&mut app.status, "Applying the confirmed immutable plan…");
+            replace_status(&mut app.status, "Applying the confirmed plan…");
             draw(terminal, app)?;
             app.apply_confirmed_plan().await?;
         }
@@ -1144,7 +1503,7 @@ fn handle_filter_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             app.editor = Editor::None;
             app.selected = 0;
-            app.status = format!("Inventory filter: {:?}", app.filter);
+            app.status = format!("Showing names matching {:?}", app.filter);
         }
         KeyCode::Backspace => {
             app.filter.pop();
@@ -1222,14 +1581,19 @@ fn open_confirmation(app: &mut App) {
         app.confirm_scroll = 0;
         app.overlay = Overlay::Confirm;
     } else {
-        replace_status(&mut app.status, "No removals pending");
+        replace_status(&mut app.status, "Nothing would be removed");
     }
 }
 
 fn switch_view(app: &mut App, view: View) {
     app.view = view;
     app.selected = 0;
-    app.detail_focused = false;
+    app.detail_open = false;
+    // One offset serves the details pane and the Setup preview. Carrying it
+    // across a view switch leaves the next pane scrolled with no key to scroll
+    // it back, which is how the old dead scroll offset looked from the outside.
+    app.pane_scroll = 0;
+    app.clamp_selection();
 }
 
 fn draw(terminal: &mut CrosstermTerminal, app: &mut App) -> Result<(), RunError> {
@@ -1240,498 +1604,326 @@ fn draw(terminal: &mut CrosstermTerminal, app: &mut App) -> Result<(), RunError>
 }
 
 fn render(frame: &mut Frame<'_>, app: &mut App) {
+    let area = frame.area();
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        render_too_small(frame, area);
+        return;
+    }
+    let hints = hint_lines(
+        hints_for(app.view, app.editor, app.overlay),
+        area.width.saturating_sub(2),
+    );
+    let footer_height = u16::try_from(hints.len()).unwrap_or(1).saturating_add(1);
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Min(5),
             Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(footer_height),
         ])
-        .split(frame.area());
+        .split(area);
     render_header(frame, app, areas[0]);
-    render_tabs(frame, app, areas[1]);
+    render_view_bar(frame, app, areas[1]);
 
     match app.view {
-        View::Dashboard => render_dashboard(frame, app, areas[2]),
-        View::Inventory => render_inventory(frame, app, areas[2]),
-        View::Plan => render_plan(frame, app, areas[2]),
-        View::Activity => render_activity(frame, app, areas[2]),
-        View::Configure => render_configure(frame, app, areas[2]),
+        View::Review => render_review(frame, app, areas[2]),
+        View::Keeping => render_keeping(frame, app, areas[2]),
+        View::Setup => render_setup(frame, app, areas[2]),
     }
-    render_footer(frame, app, areas[3]);
+    render_footer(frame, app, &hints, areas[3]);
 
+    let body = areas[2];
     if app.editor != Editor::None {
-        render_editor(frame, app);
+        render_editor(frame, app, body);
         return;
     }
 
     match app.overlay {
         Overlay::None => {}
-        Overlay::Help => render_help(frame),
-        Overlay::Confirm => render_confirmation(frame, app),
-        Overlay::CacheConfirm => render_cache_confirmation(frame, app),
-        Overlay::ConfigSave => render_config_save(frame, app),
+        Overlay::Help => render_help(frame, app, body),
+        Overlay::Activity => render_activity(frame, app, body),
+        Overlay::Confirm => render_confirmation(frame, app, body),
+        Overlay::CacheConfirm => render_cache_confirmation(frame, app, body),
+        Overlay::ConfigSave => render_config_save(frame, app, body),
     }
+}
+
+/// Say the terminal is too small and by how much, rather than drawing a layout
+/// that cannot hold its own content.
+fn render_too_small(frame: &mut Frame<'_>, area: Rect) {
+    let text = Text::from(vec![
+        Line::from("docker_maid"),
+        Line::from(""),
+        Line::from("This terminal is too small."),
+        Line::from(format!("Now:    {} x {}", area.width, area.height)),
+        Line::from(format!("Needed: {MIN_WIDTH} x {MIN_HEIGHT}")),
+        Line::from(""),
+        Line::from("Make the window bigger, or press q to quit."),
+    ]);
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), area);
 }
 
 fn render_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let config = if app.built_in_config {
-        "safe built-in config"
-    } else {
-        app.loaded
-            .path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("config")
-    };
-    let mut spans = vec![
-        Span::styled(
-            " docker_maid ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(
-            " standalone • {config} • {} resources • {} pending",
-            app.plan.decisions.len(),
-            app.plan.pending_count()
-        )),
-    ];
-    if app.loaded.config.rules.build_cache.is_some() {
-        spans.push(Span::styled(
-            " • WARNING: authorized-unscoped build cache",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn render_tabs(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let titles = View::ALL
-        .iter()
-        .enumerate()
-        .map(|(index, view)| Line::from(format!("[{}] {}", index + 1, view.title())))
-        .collect::<Vec<_>>();
-    let tabs = Tabs::new(titles)
-        .select(app.view.index())
-        .block(Block::default().borders(Borders::BOTTOM))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .divider("  ");
-    frame.render_widget(tabs, area);
-}
-
-fn render_dashboard(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
-        .split(area);
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Min(7),
-            Constraint::Length(7),
-        ])
-        .split(columns[0]);
-
-    render_dashboard_gauges(frame, app, left[0]);
-    render_disposition_table(frame, &app.plan, left[1]);
-    render_reclaimed_sparkline(frame, &app.history, left[2]);
-    frame.render_widget(
-        Paragraph::new(dashboard_detail(app))
-            .block(Block::default().borders(Borders::ALL).title("Detail"))
-            .wrap(Wrap { trim: false }),
-        columns[1],
-    );
-}
-
-fn render_dashboard_gauges(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let known_bytes = app
-        .plan
-        .decisions
-        .iter()
-        .filter_map(|decision| decision.resource.size)
-        .fold(0u64, u64::saturating_add);
-    let pending_bytes = app
+    let removals = app.plan.pending_count();
+    let reclaim = app
         .plan
         .decisions
         .iter()
         .filter(|decision| decision.action == Action::Remove)
         .filter_map(|decision| decision.resource.size)
         .fold(0u64, u64::saturating_add);
-    let protected = disposition_count(&app.plan, Disposition::Protected);
-    let gauges = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Length(2)])
-        .split(area);
-    frame.render_widget(
-        Gauge::default()
-            .block(Block::default().title("Known Docker inventory"))
-            .gauge_style(Style::default().fg(Color::Yellow))
-            .percent(percentage_u64(pending_bytes, known_bytes))
-            .label(format!(
-                "{} pending / {} known",
-                format_bytes(pending_bytes),
-                format_bytes(known_bytes)
-            )),
-        gauges[0],
-    );
-    frame.render_widget(
-        Gauge::default()
-            .block(Block::default().title("Protected"))
-            .gauge_style(Style::default().fg(Color::Green))
-            .percent(percentage_usize(protected, app.plan.decisions.len()))
-            .label(format!("{protected} protected")),
-        gauges[1],
-    );
+    let mut spans = vec![
+        Span::styled("docker_maid", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(
+            " · {removals} to remove · {} reclaimable",
+            format_bytes(reclaim)
+        )),
+    ];
+    if app.plan_validity == PlanValidity::Stale {
+        spans.push(Span::styled(
+            " · plan is stale, press r",
+            Style::default()
+                .fg(ATTENTION_COLOR)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if app.loaded.config.rules.build_cache.is_some() {
+        spans.push(Span::styled(
+            " · build cache runs without ownership evidence",
+            Style::default().fg(ATTENTION_COLOR),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_disposition_table(frame: &mut Frame<'_>, plan: &Plan, area: Rect) {
-    let rows = resource_kinds()
-        .into_iter()
-        .map(|kind| {
-            Row::new(vec![
-                Cell::from(kind.to_string()),
-                Cell::from(kind_disposition_count(plan, kind, Disposition::Protected).to_string()),
-                Cell::from(kind_disposition_count(plan, kind, Disposition::Owned).to_string()),
-                Cell::from(
-                    kind_disposition_count(plan, kind, Disposition::AuthorizedUnscoped).to_string(),
-                ),
-                Cell::from(kind_disposition_count(plan, kind, Disposition::Unowned).to_string()),
-            ])
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        Table::new(
-            rows,
-            [
-                Constraint::Length(14),
-                Constraint::Length(10),
-                Constraint::Length(8),
-                Constraint::Length(12),
-                Constraint::Length(9),
-            ],
-        )
-        .header(
-            Row::new(["TYPE", "PROTECTED", "OWNED", "UNSCOPED", "UNOWNED"])
-                .style(Style::default().add_modifier(Modifier::BOLD)),
-        )
-        .block(Block::default().borders(Borders::ALL).title("Dispositions")),
-        area,
-    );
-}
-
-fn render_reclaimed_sparkline(frame: &mut Frame<'_>, history: &[CompletedPass], area: Rect) {
-    let spark_data = history
-        .iter()
-        .rev()
-        .take(40)
-        .map(|pass| pass.reclaimed_bytes)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        Sparkline::default()
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Reclaimed bytes by completed pass"),
-            )
-            .data(&spark_data)
-            .style(Style::default().fg(Color::Cyan)),
-        area,
-    );
-}
-
-fn dashboard_detail(app: &App) -> String {
+fn render_view_bar(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let mut spans = Vec::new();
+    for view in View::ALL {
+        let label = format!(" [{}] {} ", view.index() + 1, view.title());
+        let style = if view == app.view {
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(" "));
+    }
     if let Some(last) = app.history.last() {
-        format!(
-            "Last completed pass\n\nSource: {}\nStarted: {}\nCompleted: {}\nRemoved: {}\nSkipped: {}\nFailed: {}\nReclaimed: {}\n\nRefresh: {}",
-            last.source,
-            last.started_at,
-            last.completed_at,
+        spans.push(Span::raw(format!(
+            "· last pass removed {}, freed {}",
             last.removed_count,
-            last.skipped_count,
-            last.failure_count,
-            format_bytes(last.reclaimed_bytes),
-            humantime::format_duration(app.refresh_interval())
-        )
-    } else {
-        format!(
-            "Last completed pass\n\nNone recorded.\n\nMode: standalone\nRefresh: {}\n\n{}",
-            humantime::format_duration(app.refresh_interval()),
-            if app.built_in_config {
-                "Safe built-in mode has no removal rules.\nCreate one with:\ndocker_maid config default > docker_maid.toml"
-            } else {
-                "Configuration loaded."
-            }
-        )
+            format_bytes(last.reclaimed_bytes)
+        )));
     }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_inventory(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .split(area);
-    let left = Layout::default()
+fn render_review(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let rows = app.review_rows();
+    let hidden = app.plan_targets().len().saturating_sub(rows.len());
+    let (list_area, detail_area) = split_for_detail(app, area);
+
+    let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(4)])
-        .split(columns[0]);
-    let kinds = resource_kinds()
-        .into_iter()
-        .map(|kind| Line::from(kind.to_string()))
-        .collect::<Vec<_>>();
-    let kind_index = resource_kinds()
-        .iter()
-        .position(|kind| *kind == app.inventory_kind)
-        .unwrap_or(0);
-    frame.render_widget(
-        Tabs::new(kinds)
-            .select(kind_index)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Resource type"),
-            )
-            .highlight_style(Style::default().fg(Color::Cyan)),
-        left[0],
-    );
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(list_area);
 
-    let decisions = app.filtered_inventory();
-    let rows = decisions
-        .iter()
-        .map(|decision| {
-            Row::new(vec![
-                Cell::from(decision.resource.name.clone()),
-                Cell::from(decision.resource.state.to_string()),
-                Cell::from(format_age(decision.age_seconds)),
-                Cell::from(
-                    decision
-                        .resource
-                        .size
-                        .map_or_else(|| "unknown".to_owned(), format_bytes),
-                ),
-                Cell::from(decision.disposition.to_string()),
-                Cell::from(
-                    decision
-                        .matched_rule
-                        .clone()
-                        .unwrap_or_else(|| "-".to_owned()),
-                ),
-            ])
-            .style(disposition_style(decision.disposition))
-        })
-        .collect::<Vec<_>>();
-    let title = if app.filter.is_empty() {
-        format!("Inventory ({})", decisions.len())
-    } else {
-        format!("Inventory ({}) • filter={:?}", decisions.len(), app.filter)
-    };
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Percentage(25),
-            Constraint::Length(10),
-            Constraint::Length(9),
-            Constraint::Length(10),
-            Constraint::Length(20),
-            Constraint::Percentage(25),
-        ],
-    )
-    .header(
-        Row::new(["NAME", "STATE", "AGE", "SIZE", "DISPOSITION", "RULE"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
-    )
-    .block(Block::default().borders(Borders::ALL).title(title))
-    .row_highlight_style(
+    let mut heading = vec![Span::styled(
+        format!("WOULD REMOVE  ({})", rows.len()),
         Style::default()
-            .bg(Color::DarkGray)
+            .fg(REMOVE_COLOR)
             .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol("▶ ");
-    let mut state = TableState::default().with_selected(Some(app.selected));
-    frame.render_stateful_widget(table, left[1], &mut state);
+    )];
+    if hidden != 0 {
+        heading.push(Span::styled(
+            format!("   {hidden} more hidden by the filter"),
+            Style::default().fg(ATTENTION_COLOR),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(heading)), sections[0]);
 
-    let detail = app
-        .selected_inventory()
-        .map_or_else(|| "No object selected".to_owned(), inventory_detail);
-    let title = if app.detail_focused {
-        "Detail • focused"
+    let items = if rows.is_empty() {
+        vec![ListItem::new(Text::from(vec![
+            Line::from(""),
+            Line::from("  Nothing would be removed."),
+            Line::from("  Every resource is kept. Press 2 to see why."),
+        ]))]
     } else {
-        "Detail"
+        rows.iter()
+            .map(|decision| ListItem::new(removal_entry(decision)))
+            .collect::<Vec<_>>()
     };
-    frame.render_widget(
-        Paragraph::new(detail)
-            .block(Block::default().borders(Borders::ALL).title(title))
-            .wrap(Wrap { trim: false }),
-        columns[1],
+    // An empty list has a message in it, not a row, so nothing is selected.
+    let mut state = ListState::default().with_selected((!rows.is_empty()).then_some(app.selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("▶ "),
+        sections[1],
+        &mut state,
     );
+
+    let kept = app
+        .plan
+        .decisions
+        .len()
+        .saturating_sub(app.plan_targets().len());
+    frame.render_widget(
+        Paragraph::new(Line::from(format!(
+            "KEEPING  ({kept})                    press 2 to see"
+        ))),
+        sections[2],
+    );
+
+    render_detail_pane(frame, app, detail_area);
 }
 
-fn render_plan(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
-        .split(area);
-    let targets = app.plan_targets();
-    let rows = targets
-        .iter()
-        .map(|decision| {
-            Row::new(vec![
-                Cell::from(decision.resource.kind.to_string()),
-                Cell::from(decision.resource.name.clone()),
-                Cell::from(format_age(decision.age_seconds)),
-                Cell::from(
-                    decision
-                        .resource
-                        .size
-                        .map_or_else(|| "unknown".to_owned(), format_bytes),
-                ),
-                Cell::from(
-                    decision
-                        .matched_rule
-                        .clone()
-                        .unwrap_or_else(|| "-".to_owned()),
-                ),
-                Cell::from(decision.disposition.to_string()),
-            ])
-        })
-        .collect::<Vec<_>>();
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(12),
-            Constraint::Percentage(27),
-            Constraint::Length(9),
-            Constraint::Length(10),
-            Constraint::Percentage(25),
-            Constraint::Length(20),
-        ],
-    )
-    .header(
-        Row::new(["TYPE", "NAME", "AGE", "SIZE", "RULE", "DISPOSITION"])
-            .style(Style::default().add_modifier(Modifier::BOLD)),
-    )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!("Immutable plan • {} targets", targets.len())),
-    )
-    .row_highlight_style(Style::default().bg(Color::DarkGray))
-    .highlight_symbol("▶ ");
-    let mut state = TableState::default().with_selected(Some(app.selected));
-    frame.render_stateful_widget(table, columns[0], &mut state);
+/// One removal, rendered as the three lines a person reads in order: what it
+/// is, how big and how old, and why the policy claimed it.
+fn removal_entry(decision: &Decision) -> Text<'static> {
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            format!("{:<13}", decision.resource.kind.to_string()),
+            Style::default().fg(REMOVE_COLOR),
+        ),
+        Span::styled(
+            decision.resource.name.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])];
+    lines.push(Line::from(format!(
+        "     {} old · {}",
+        format_age(decision.age_seconds),
+        decision
+            .resource
+            .size
+            .map_or_else(|| "size unknown".to_owned(), format_bytes)
+    )));
+    for (index, clause) in reason_clauses(&decision.reason).into_iter().enumerate() {
+        let label = if index == 0 {
+            "     why:  "
+        } else {
+            "           "
+        };
+        lines.push(Line::from(format!("{label}{clause}")));
+    }
+    if decision.disposition == Disposition::AuthorizedUnscoped {
+        lines.push(Line::from(Span::styled(
+            format!("     {}", plain_disposition(decision.disposition)),
+            Style::default()
+                .fg(ATTENTION_COLOR)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(""));
+    Text::from(lines)
+}
 
-    let mut groups = BTreeMap::<String, (usize, u64)>::new();
-    for decision in &targets {
-        let entry = groups
-            .entry(
-                decision
-                    .matched_rule
-                    .clone()
-                    .unwrap_or_else(|| "-".to_owned()),
-            )
-            .or_default();
-        entry.0 += 1;
-        entry.1 = entry
-            .1
-            .saturating_add(decision.resource.size.unwrap_or_default());
-    }
-    let mut detail = format!(
-        "Plan summary\n\nID: {}\nCreated: {}\nConfig: {}\nValid: {}\nTargets: {}\nEstimated reclaim: {}\n\nBy rule:\n",
-        app.plan_id,
-        app.plan_created_at,
-        app.config_hash,
-        app.plan_validity == PlanValidity::Valid,
-        targets.len(),
-        format_bytes(
-            targets
-                .iter()
-                .filter_map(|decision| decision.resource.size)
-                .fold(0u64, u64::saturating_add)
-        )
+fn render_keeping(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let rows = app.keeping_rows();
+    let (list_area, detail_area) = split_for_detail(app, area);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .split(list_area);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("KEEPING  ({})", rows.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))),
+        sections[0],
     );
-    for (rule, (count, bytes)) in groups {
-        let _ = writeln!(detail, "• {rule}: {count} / {}", format_bytes(bytes));
-    }
-    if targets.is_empty() {
-        detail.push_str("\nNo removals pending.");
+
+    let items = if rows.is_empty() {
+        vec![ListItem::new("  Nothing is being kept.")]
     } else {
-        detail.push_str("\nPress y or a to review the exact target set.");
-    }
-    frame.render_widget(
-        Paragraph::new(detail)
-            .block(Block::default().borders(Borders::ALL).title("Detail"))
-            .wrap(Wrap { trim: false }),
-        columns[1],
+        rows.iter()
+            .enumerate()
+            .map(|(index, decision)| ListItem::new(keeping_entry(decision, index == app.selected)))
+            .collect::<Vec<_>>()
+    };
+    let mut state = ListState::default().with_selected((!rows.is_empty()).then_some(app.selected));
+    frame.render_stateful_widget(
+        List::new(items)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("▶ "),
+        sections[1],
+        &mut state,
     );
+
+    render_detail_pane(frame, app, detail_area);
 }
 
-fn render_activity(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let mut items = Vec::new();
-    for pass in app.history.iter().rev() {
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("{} ", pass.completed_at),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("{} pass", pass.source),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                " • removed={} skipped={} failed={} reclaimed={}",
-                pass.removed_count,
-                pass.skipped_count,
-                pass.failure_count,
-                format_bytes(pass.reclaimed_bytes)
-            )),
-        ])));
-        for event in &pass.actions {
-            if let EventData::Action {
-                action,
-                resource_kind,
-                resource_name,
-                matched_rule,
-                freed_bytes,
-                ..
-            } = &event.data
-            {
-                items.push(ListItem::new(format!(
-                    "  {action:8} {resource_kind:12} {resource_name} • {matched_rule} • {}",
-                    format_bytes(*freed_bytes)
-                )));
-            }
+/// One kept resource. This list routinely holds sixty rows, so it stays one
+/// line per item and only the selected row opens up.
+fn keeping_entry(decision: &Decision, expanded: bool) -> Text<'static> {
+    let style = match decision.disposition {
+        Disposition::Protected => Style::default().fg(PROTECT_COLOR),
+        Disposition::AuthorizedUnscoped => Style::default().fg(ATTENTION_COLOR),
+        Disposition::Owned | Disposition::Unowned => Style::default(),
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{:<13}", decision.resource.kind.to_string()), style),
+        Span::raw(format!("{:<28}", truncate(&decision.resource.name, 27))),
+        Span::styled(plain_disposition(decision.disposition), style),
+    ])];
+    if expanded {
+        lines.push(Line::from(format!(
+            "     {} · {}",
+            decision.resource.state,
+            decision
+                .resource
+                .size
+                .map_or_else(|| "size unknown".to_owned(), format_bytes)
+        )));
+        for (index, clause) in reason_clauses(&decision.reason).into_iter().enumerate() {
+            let label = if index == 0 {
+                "     why:  "
+            } else {
+                "           "
+            };
+            lines.push(Line::from(format!("{label}{clause}")));
         }
     }
-    if items.is_empty() {
-        items.push(ListItem::new("No completed cleanup passes recorded."));
+    Text::from(lines)
+}
+
+/// Split the body into a list and an optional detail pane.
+fn split_for_detail(app: &App, area: Rect) -> (Rect, Option<Rect>) {
+    if !app.detail_open || area.width < 100 {
+        return (area, None);
     }
-    let items = items
-        .into_iter()
-        .skip(usize::from(app.activity_scroll))
-        .collect::<Vec<_>>();
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(area);
+    (columns[0], Some(columns[1]))
+}
+
+fn render_detail_pane(frame: &mut Frame<'_>, app: &App, area: Option<Rect>) {
+    let Some(area) = area else {
+        return;
+    };
+    let detail = app
+        .selected_decision()
+        .map_or_else(|| "Nothing is selected".to_owned(), resource_detail);
     frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Activity • {} completed passes", app.history.len())),
-        ),
+        Paragraph::new(detail)
+            .block(Block::default().borders(Borders::ALL).title("Details"))
+            .scroll((app.pane_scroll, 0))
+            .wrap(Wrap { trim: false }),
         area,
     );
 }
 
-fn render_configure(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_setup(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(61), Constraint::Percentage(39)])
@@ -1740,32 +1932,32 @@ fn render_configure(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(5)])
         .split(columns[0]);
-    render_configure_header(frame, app, left[0]);
-    render_configure_candidates(frame, app, left[1]);
+    render_setup_header(frame, app, left[0]);
+    render_setup_candidates(frame, app, left[1]);
     frame.render_widget(
-        Paragraph::new(configure_detail(app))
+        Paragraph::new(setup_detail(app))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title("Policy and before/after preview"),
             )
-            .scroll((app.rules_scroll, 0))
+            .scroll((app.pane_scroll, 0))
             .wrap(Wrap { trim: false }),
         columns[1],
     );
 }
 
-fn render_configure_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_setup_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let current_stage = if app.config_proposal.is_some() {
         "Preview ready • s saves"
     } else if app.configure_selected.is_empty() {
-        "Select ownership candidates"
+        "Choose what this policy owns"
     } else {
-        "Press v to build the real plan preview"
+        "Press v to build the real preview"
     };
     frame.render_widget(
         Paragraph::new(format!(
-            "Profile: {} [h/l] • TTL c={} i={} v={} • cache={}/{}\nSelected: {} of {} • {current_stage} • [{}] field, e edit",
+            "Profile: {} [←→] • keep for c={} i={} v={} • cache={}/{}\nUsing: {} of {} • {current_stage} • [{}] field, e edits",
             app.configure_profile.title(),
             app.configure_policy.stopped_container_ttl,
             app.configure_policy.image_ttl,
@@ -1777,14 +1969,14 @@ fn render_configure_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
             PolicyField::ALL[app.policy_field].title()
         ))
         .block(Block::default().borders(Borders::ALL).title(format!(
-            "Survey {} • {} unowned",
+            "Survey {} • {} with no rule",
             app.survey.snapshot_id, app.survey.summary.unowned_resources
         ))),
         area,
     );
 }
 
-fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_setup_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let display_indices = candidate_display_indices(&app.survey.candidates);
     let rows = display_indices
         .iter()
@@ -1796,7 +1988,7 @@ fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 "[ ]"
             };
             let style = if candidate.warning.is_some() {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(ATTENTION_COLOR)
             } else {
                 Style::default()
             };
@@ -1825,9 +2017,9 @@ fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Candidates • Space/Enter toggles"),
+            .title("Candidates • space uses one"),
     )
-    .row_highlight_style(Style::default().bg(Color::DarkGray))
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
     .highlight_symbol("▶ ");
     let selected_display_row = display_indices
         .iter()
@@ -1837,15 +2029,15 @@ fn render_configure_candidates(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn configure_detail(app: &App) -> String {
+fn setup_detail(app: &App) -> String {
     if let Some(proposal) = &app.config_proposal {
         let warnings = if proposal.warnings.is_empty() {
             "none".to_owned()
         } else {
             proposal.warnings.join("\n")
         };
-        format!(
-            "Proposal {}\n\nTarget: {}\nProfile: {}\nCandidates: {}\nSelected objects: {}\n\nPending before: {}\nPending after: {}\nNewly pending: {}\nEstimated reclaim: {}\n\nWarnings:\n{}\n\nThe save changes configuration only. It never deletes Docker objects. After save, the Plan view refreshes and apply remains a separate confirmation.",
+        return format!(
+            "Proposal {}\n\nTarget: {}\nProfile: {}\nCandidates: {}\nSelected objects: {}\n\nWould remove before: {}\nWould remove after: {}\nNewly claimed: {}\nEstimated reclaim: {}\n\nWarnings:\n{}\n\nThe save changes configuration only. It never deletes Docker objects. After save, Review refreshes and apply remains a separate confirmation.",
             proposal.proposal_id,
             proposal.target_path.display(),
             proposal.profile,
@@ -1856,103 +2048,121 @@ fn configure_detail(app: &App) -> String {
             proposal.preview.newly_pending,
             format_bytes(proposal.preview.estimated_reclaim_bytes),
             warnings
-        )
-    } else if let Some(candidate) = app.selected_candidate() {
-        let mut detail = format!(
-            "{}\n\nID: {}\nEvidence: {}\nObjects: {}\nKnown size: {}\n",
-            candidate.title,
-            candidate.id,
-            candidate.evidence,
-            candidate.resources.len(),
-            format_bytes(candidate.known_bytes)
         );
-        if let Some(warning) = &candidate.warning {
-            let _ = writeln!(detail, "\n{warning}");
-            if matches!(candidate.selector, CandidateSelector::BuildCache) {
-                detail.push_str("Enable only when daemon-wide cache cleanup is intentional.\n");
-            }
-        }
-        detail.push_str("\nObserved objects:\n");
-        for resource in candidate.resources.iter().take(12) {
-            let _ = writeln!(
-                detail,
-                "• {} {}{}{}",
-                resource.resource_kind,
-                resource.name,
-                if resource.running { " • running" } else { "" },
-                if resource.referenced {
-                    " • referenced"
-                } else {
-                    ""
-                }
-            );
-        }
-        if candidate.resources.len() > 12 {
-            let _ = writeln!(detail, "• … {} more", candidate.resources.len() - 12);
-        }
-        detail
-    } else {
-        "No exact agent or Compose ownership evidence was found.\n\nUnlabeled objects remain unowned. In Inventory, select an object and press c to explicitly approve a name prefix."
-            .to_owned()
     }
+    let Some(candidate) = app.selected_candidate() else {
+        return "No exact agent or Compose ownership evidence was found.\n\nUnlabeled objects stay unowned. In Review or Keeping, select an object and press c to approve a name prefix."
+            .to_owned();
+    };
+    let mut detail = format!(
+        "{}\n\nID: {}\nEvidence: {}\nObjects: {}\nKnown size: {}\n",
+        candidate.title,
+        candidate.id,
+        candidate.evidence,
+        candidate.resources.len(),
+        format_bytes(candidate.known_bytes)
+    );
+    if let Some(warning) = &candidate.warning {
+        let _ = writeln!(detail, "\n{warning}");
+        if matches!(candidate.selector, CandidateSelector::BuildCache) {
+            detail.push_str("Enable only when daemon-wide cache cleanup is intentional.\n");
+        }
+    }
+    detail.push_str("\nObserved objects:\n");
+    for resource in candidate.resources.iter().take(12) {
+        let _ = writeln!(
+            detail,
+            "• {} {}{}{}",
+            resource.resource_kind,
+            resource.name,
+            if resource.running { " • running" } else { "" },
+            if resource.referenced {
+                " • referenced"
+            } else {
+                ""
+            }
+        );
+    }
+    if candidate.resources.len() > 12 {
+        let _ = writeln!(detail, "• … {} more", candidate.resources.len() - 12);
+    }
+    detail
 }
 
-fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let status = if app.editor == Editor::Prefix {
-        format!("prefix={}▌", app.prefix_input)
-    } else if app.editor == Editor::Policy {
-        format!(
+/// Pack a key table into lines that fit, so the footer never advertises a key
+/// off the right edge of the terminal.
+fn hint_lines(hints: &[KeyHint], width: u16) -> Vec<String> {
+    let width = usize::from(width.max(1));
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for hint in hints {
+        let piece = hint_text(hint);
+        if current.is_empty() {
+            current = piece;
+        } else if current.chars().count() + 3 + piece.chars().count() <= width {
+            let _ = write!(current, " · {piece}");
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current = piece;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn render_footer(frame: &mut Frame<'_>, app: &App, hints: &[String], area: Rect) {
+    let status = match app.editor {
+        Editor::Prefix => format!("prefix={}▌", app.prefix_input),
+        Editor::Policy => format!(
             "{}={}▌",
             PolicyField::ALL[app.policy_field].title(),
             app.prefix_input
-        )
-    } else if app.editor == Editor::Filter {
-        format!("/{}▌", app.filter)
-    } else {
-        app.status.clone()
+        ),
+        Editor::Filter => format!("/{}▌", app.filter),
+        Editor::None => app.status.clone(),
     };
-    let line = if app.editor == Editor::None {
-        Line::from(vec![
-            Span::styled(
-                " ↑↓/jk move · 1–5 views · c prefix · p protect · P family · h/l profile · [/] field · e edit · v preview · s save · a apply · q quit ",
-                Style::default().fg(Color::Black).bg(Color::Cyan),
-            ),
-            Span::raw(format!("  {status}")),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                " Enter save · Esc cancel · Ctrl-C quit ",
-                Style::default().fg(Color::Black).bg(Color::Cyan),
-            ),
-            Span::raw(format!("  {status}")),
-        ])
-    };
-    frame.render_widget(Paragraph::new(line), area);
+    let mut lines = hints
+        .iter()
+        .map(|line| {
+            Line::from(Span::styled(
+                format!(" {line} "),
+                Style::default().add_modifier(Modifier::REVERSED),
+            ))
+        })
+        .collect::<Vec<_>>();
+    lines.push(Line::from(status));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn render_editor(frame: &mut Frame<'_>, app: &App) {
-    let (title, label, guidance) = match app.editor {
+fn render_editor(frame: &mut Frame<'_>, app: &App, body: Rect) {
+    let (title, label, guidance, value) = match app.editor {
         Editor::Policy => (
             "Edit policy value",
             PolicyField::ALL[app.policy_field].title(),
             "Durations: 15m, 2h, 7d • cache bytes: 10GiB",
+            app.prefix_input.as_str(),
         ),
         Editor::Prefix => (
             "Add explicit name prefix",
             "prefix",
             "Only matching names become owned by this rule",
+            app.prefix_input.as_str(),
         ),
+        // The filter writes to its own buffer. Reading `prefix_input` here
+        // showed whatever the last prefix or policy edit left behind.
         Editor::Filter => (
-            "Filter inventory",
+            "Narrow this list",
             "filter",
             "Matching is case-insensitive and fuzzy",
+            app.filter.as_str(),
         ),
         Editor::None => return,
     };
-    let area = centered_rect(76, 34, frame.area());
+    let area = overlay_area(body, 2, body.height / 4);
     let input_width = usize::from(area.width.saturating_sub(8)).max(1);
-    let input = visible_input_tail(&app.prefix_input, input_width);
+    let input = visible_input_tail(value, input_width);
     let message = if app.status.starts_with("Invalid value:") {
         app.status.as_str()
     } else {
@@ -1961,9 +2171,9 @@ fn render_editor(frame: &mut Frame<'_>, app: &App) {
     let text = Text::from(vec![
         Line::from(format!("{label}:")),
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::raw("> "),
             Span::styled(input, Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled("▌", Style::default().fg(Color::Cyan)),
+            Span::raw("▌"),
         ]),
         Line::from(""),
         Line::from(message),
@@ -1972,12 +2182,7 @@ fn render_editor(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(title),
-            )
+            .block(Block::default().borders(Borders::ALL).title(title))
             .wrap(Wrap { trim: false }),
         area,
     );
@@ -1996,48 +2201,119 @@ fn visible_input_tail(value: &str, max_chars: usize) -> String {
     format!("…{tail}")
 }
 
-fn render_help(frame: &mut Frame<'_>) {
-    let area = centered_rect(70, 70, frame.area());
+/// Every key this interface binds, and what it does.
+///
+/// The left column is the list of key symbols, separated by spaces, so a test
+/// can prove that no key is bound without being written down somewhere a person
+/// can find it.
+const HELP_ENTRIES: &[(&str, &str)] = &[
+    ("1 2 3", "Review, Keeping, Setup"),
+    ("↑ ↓ j k", "Move the selection"),
+    ("pgup pgdn", "Review, Keeping: jump ten rows"),
+    ("pgup pgdn", "Setup: scroll the preview pane"),
+    ("space", "Review, Keeping: protect or release this object"),
+    ("space", "Setup: use or drop this ownership candidate"),
+    ("P", "Protect or release this object's whole label family"),
+    ("enter", "Open or close the details pane"),
+    ("/", "Narrow the list by name, id, or rule"),
+    ("c", "Approve a name prefix as ownership evidence"),
+    ("a", "Review the exact removal set, then apply it"),
+    ("l", "Open the activity log"),
+    ("r", "Re-read configuration, state, and Docker"),
+    ("← →", "Setup: change the policy profile"),
+    ("[ ]", "Setup: choose a policy value; e edits it"),
+    ("e", "Setup: edit the chosen policy value"),
+    ("v", "Setup: preview the proposed configuration"),
+    ("s", "Setup: save a previewed proposal"),
+    ("?", "Open this help; esc closes it"),
+    ("q", "Quit"),
+];
+
+fn render_help(frame: &mut Frame<'_>, app: &App, body: Rect) {
+    let area = overlay_area(body, 0, 0);
     frame.render_widget(Clear, area);
-    let help = Text::from(vec![
-        Line::from("docker_maid keyboard help"),
-        Line::from(""),
-        Line::from("1–5        Switch views"),
-        Line::from("↑/↓ or j/k  Move selection or scroll"),
-        Line::from("←/→ or h/l  Change inventory resource type"),
-        Line::from("/           Filter inventory; Enter accepts; Esc clears"),
-        Line::from("Enter       Focus inventory detail"),
-        Line::from("p           Toggle typed runtime protection for this object"),
-        Line::from("P           Toggle one label protection for this whole family"),
-        Line::from("c           Create an explicit name-prefix candidate from Inventory"),
-        Line::from("Space/Enter Select a Configure ownership candidate"),
-        Line::from("h/l         Change the Configure policy profile"),
-        Line::from("[/] then e  Select and edit a profile value"),
-        Line::from("v           Preview the exact proposed config and removal plan"),
-        Line::from("s           Save a reviewed proposal (configuration only)"),
-        Line::from("a or y      Review the policy-generated plan"),
-        Line::from("r           Refresh configuration, state, and Docker inventory"),
-        Line::from("? or Esc    Close help"),
-        Line::from("q           Quit"),
-        Line::from(""),
-        Line::from("No key deletes one object. Apply can only execute the confirmed plan."),
-    ]);
+    let mut lines = vec![Line::from("docker_maid keyboard help"), Line::from("")];
+    for (keys, description) in HELP_ENTRIES {
+        lines.push(Line::from(format!("{keys:<10}  {description}")));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "No key deletes one object. Apply can only execute the confirmed set.",
+    ));
     frame.render_widget(
-        Paragraph::new(help)
+        Paragraph::new(Text::from(lines))
             .block(Block::default().borders(Borders::ALL).title("Help"))
+            .scroll((app.overlay_scroll, 0))
             .wrap(Wrap { trim: false }),
         area,
     );
 }
 
-fn render_cache_confirmation(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(70, 45, frame.area());
+/// Every line the activity log can show, so the scroll position can be clamped
+/// against a real length rather than against nothing.
+fn activity_lines(history: &[CompletedPass]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for pass in history.iter().rev() {
+        lines.push(format!(
+            "{} · {} pass · removed {} · skipped {} · failed {} · freed {}",
+            format_timestamp(pass.completed_at),
+            pass.source,
+            pass.removed_count,
+            pass.skipped_count,
+            pass.failure_count,
+            format_bytes(pass.reclaimed_bytes)
+        ));
+        for event in &pass.actions {
+            if let EventData::Action {
+                action,
+                resource_kind,
+                resource_name,
+                matched_rule,
+                freed_bytes,
+                ..
+            } = &event.data
+            {
+                lines.push(format!(
+                    "  {action:8} {resource_kind:12} {resource_name} · {matched_rule} · {}",
+                    format_bytes(*freed_bytes)
+                ));
+            }
+        }
+    }
+    if lines.is_empty() {
+        lines.push("No completed cleanup passes recorded.".to_owned());
+    }
+    lines
+}
+
+fn render_activity(frame: &mut Frame<'_>, app: &App, body: Rect) {
+    let area = overlay_area(body, 0, 0);
+    frame.render_widget(Clear, area);
+    let lines = activity_lines(&app.history);
+    let items = lines
+        .iter()
+        .skip(usize::from(app.overlay_scroll))
+        .map(|line| ListItem::new(line.clone()))
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(items).block(Block::default().borders(Borders::ALL).title(
+            match app.history.len() {
+                1 => "Activity log • 1 completed pass".to_owned(),
+                count => format!("Activity log • {count} completed passes"),
+            },
+        )),
+        area,
+    );
+}
+
+fn render_cache_confirmation(frame: &mut Frame<'_>, app: &App, body: Rect) {
+    let area = overlay_area(body, 3, 1);
     frame.render_widget(Clear, area);
     let count = app
         .selected_candidate()
         .map_or(0, |candidate| candidate.resources.len());
     let text = format!(
-        "Build cache is not attributable to an agent, project, label, or name.\n\nThis enables an authorized-unscoped proposal for {count} current cache records. The {} profile suggests an age floor and byte budget.\n\nNo deletion happens here. The next stage shows the exact plan.\n\nEnter/y: enable candidate    Esc/n: cancel",
+        "Build cache carries no owner, project, label, or name.\n\nThis authorizes a rule over {count} current cache records with no ownership evidence. The {} profile suggests an age floor and a byte budget.\n\nNothing is deleted here. The next stage shows the exact plan.\n\ny: enable    esc: cancel",
         app.configure_profile.title()
     );
     frame.render_widget(
@@ -2045,21 +2321,22 @@ fn render_cache_confirmation(frame: &mut Frame<'_>, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("WARNING • daemon-wide build cache"),
+                    .border_style(Style::default().fg(ATTENTION_COLOR))
+                    .title("Careful • daemon-wide build cache"),
             )
             .wrap(Wrap { trim: false }),
         area,
     );
 }
 
-fn render_config_save(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(76, 58, frame.area());
+fn render_config_save(frame: &mut Frame<'_>, app: &App, body: Rect) {
+    let area = overlay_area(body, 2, 0);
     frame.render_widget(Clear, area);
     let text = app.config_proposal.as_ref().map_or_else(
         || "No proposal is available.".to_owned(),
         |proposal| {
             format!(
-                "Write reviewed configuration?\n\nPath: {}\nProposal: {}\nProfile: {}\nSelected objects: {}\nPending removals after save: {}\nNewly pending: {}\nEstimated reclaim: {}\n\nThe writer checks the source hash and Docker inventory again. Existing config is backed up. Manual rules and comments remain outside the managed region.\n\nThis action does not delete Docker objects.\n\nEnter/y: save    Esc/n: cancel",
+                "Write reviewed configuration?\n\nPath: {}\nProposal: {}\nProfile: {}\nSelected objects: {}\nWould remove after save: {}\nNewly claimed: {}\nEstimated reclaim: {}\n\nThe writer checks the source hash and Docker inventory again. Existing config is backed up. Manual rules and comments stay outside the managed region.\n\nThis does not delete Docker objects.\n\ny: save    esc: cancel",
                 proposal.target_path.display(),
                 proposal.proposal_id,
                 proposal.profile,
@@ -2082,34 +2359,35 @@ fn render_config_save(frame: &mut Frame<'_>, app: &App) {
     );
 }
 
-fn render_confirmation(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(78, 78, frame.area());
+fn render_confirmation(frame: &mut Frame<'_>, app: &App, body: Rect) {
+    let area = overlay_area(body, 0, 0);
     frame.render_widget(Clear, area);
     let targets = app.plan_targets();
-    let inner_height = usize::from(area.height.saturating_sub(11));
+    // At least one target is always listed. A modal that offers to apply while
+    // showing nothing is the thing this floor exists to prevent.
+    let inner_height = usize::from(area.height.saturating_sub(9)).max(1);
     let mut lines = vec![
         Line::from(Span::styled(
-            format!("Apply this immutable {}-target plan?", targets.len()),
+            match targets.len() {
+                1 => "Remove this 1 object?".to_owned(),
+                count => format!("Remove these {count} objects?"),
+            },
             Style::default()
-                .fg(Color::Yellow)
+                .fg(REMOVE_COLOR)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("Plan ID: {}", app.plan_id)),
-        Line::from(format!(
-            "Created: {} • config: {}",
-            app.plan_created_at, app.config_hash
-        )),
+        Line::from(format!("Plan: {}", app.plan_id)),
         Line::from(""),
     ];
-    let authorized_unscoped = targets
+    let unscoped = targets
         .iter()
         .filter(|decision| decision.disposition == Disposition::AuthorizedUnscoped)
         .count();
-    if authorized_unscoped != 0 {
+    if unscoped != 0 {
         lines.push(Line::from(Span::styled(
-            format!("WARNING: {authorized_unscoped} target(s) are authorized-unscoped"),
+            format!("{unscoped} of these have no ownership evidence; you authorized them"),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(ATTENTION_COLOR)
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -2130,7 +2408,7 @@ fn render_confirmation(frame: &mut Frame<'_>, app: &App) {
         .min(targets.len());
     if targets.len() > inner_height {
         lines.push(Line::from(format!(
-            "Showing {}–{} of {} • j/k or PgUp/PgDn scroll",
+            "Showing {}–{} of {} • ↑↓ or PgUp/PgDn scroll",
             app.confirm_scroll.saturating_add(1),
             shown_end,
             targets.len()
@@ -2138,41 +2416,38 @@ fn render_confirmation(frame: &mut Frame<'_>, app: &App) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "Enter confirms this exact target set. Esc or n cancels.",
-    ));
-    lines.push(Line::from(
-        "Every target is revalidated immediately before deletion; no target can be added.",
+        "Enter confirms this exact set. Esc cancels. No target can be added.",
     ));
     frame.render_widget(
         Paragraph::new(lines)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow))
-                    .title("Confirm plan application"),
+                    .border_style(Style::default().fg(REMOVE_COLOR))
+                    .title("Confirm removal"),
             )
             .wrap(Wrap { trim: false }),
         area,
     );
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
+/// An overlay rectangle inset from the body by an exact number of cells.
+///
+/// Exact arithmetic rather than percentages: a percentage layout can round an
+/// overlay one cell wider than the region it sits in, and a box that overruns
+/// its frame by one column wraps and corrupts the line below it.
+fn overlay_area(body: Rect, margin_x: u16, margin_y: u16) -> Rect {
+    let margin_x = margin_x.min(body.width / 2);
+    let margin_y = margin_y.min(body.height / 2);
+    Rect {
+        x: body.x.saturating_add(margin_x),
+        y: body.y.saturating_add(margin_y),
+        width: body.width.saturating_sub(margin_x.saturating_mul(2)).max(1),
+        height: body
+            .height
+            .saturating_sub(margin_y.saturating_mul(2))
+            .max(1),
+    }
 }
 
 fn policy_field_value(field: PolicyField, policy: &PolicySettings) -> String {
@@ -2282,17 +2557,17 @@ fn load_tui_config(explicit: Option<&Path>) -> Result<(LoadedConfig, bool), RunE
 fn startup_status(loaded: &LoadedConfig, built_in_config: bool, plan: &Plan) -> String {
     if built_in_config {
         format!(
-            "No config found • Configure opened • proposed writes target {}",
+            "No config found • Setup opened • proposed writes target {}",
             loaded.path.display()
         )
     } else if loaded.config.rules.build_cache.is_some() {
         format!(
-            "Loaded {} • WARNING: build cache is authorized-unscoped",
+            "Loaded {} • build cache is authorized without ownership evidence",
             loaded.path.display()
         )
     } else {
         format!(
-            "Loaded {} • {} pending removals",
+            "Loaded {} • {} would be removed",
             loaded.path.display(),
             plan.pending_count()
         )
@@ -2365,7 +2640,7 @@ fn execution_status(report: &ExecutionReport) -> String {
         .iter()
         .filter(|outcome| outcome.status == TargetStatus::Failed)
         .count();
-    format!("Apply complete: removed {removed}, skipped {skipped}, failed {failed}")
+    format!("Done: removed {removed}, skipped {skipped}, failed {failed}")
 }
 
 /// Build the exact protection value for one family and count its members in
@@ -2432,9 +2707,45 @@ fn fuzzy_match(haystack: &str, needle: &str) -> bool {
     false
 }
 
-fn inventory_detail(decision: &Decision) -> String {
+/// Split a policy reason into the clauses the planner already separated, so
+/// each one gets its own line instead of arriving as one long sentence.
+fn reason_clauses(reason: &str) -> Vec<String> {
+    let clauses = reason
+        .split(';')
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if clauses.is_empty() {
+        vec![reason.to_owned()]
+    } else {
+        clauses
+    }
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+    let kept = value
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    format!("{kept}…")
+}
+
+/// A person reads yes and no. `true` and `false` are for the machine document.
+const fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn resource_detail(decision: &Decision) -> String {
     let mut detail = format!(
-        "{}\n\nType: {}\nID: {}\nState: {}\nAge: {}\nSize: {}\nDisposition: {}\nRule: {}\nAction: {}\nReferenced: {}\nDangling: {}\nSystem: {}\n\nWhy:\n{}",
+        "{}\n\nType: {}\nID: {}\nState: {}\nAge: {}\nSize: {}\nStatus: {}\nRule: {}\nAction: {}\nIn use: {}\nDangling: {}\nDocker's own: {}\n\nWhy:\n{}",
         decision.resource.name,
         decision.resource.kind,
         decision.resource.id,
@@ -2444,13 +2755,13 @@ fn inventory_detail(decision: &Decision) -> String {
             .resource
             .size
             .map_or_else(|| "unknown".to_owned(), format_bytes),
-        decision.disposition,
+        plain_disposition(decision.disposition),
         decision.matched_rule.as_deref().unwrap_or("-"),
         decision.action,
-        decision.resource.referenced,
-        decision.resource.dangling,
-        decision.resource.system,
-        decision.reason,
+        yes_no(decision.resource.referenced),
+        yes_no(decision.resource.dangling),
+        yes_no(decision.resource.system),
+        reason_clauses(&decision.reason).join("\n"),
     );
     if !decision.resource.labels.is_empty() {
         detail.push_str("\n\nLabels:\n");
@@ -2467,44 +2778,35 @@ fn inventory_detail(decision: &Decision) -> String {
     detail
 }
 
-fn disposition_style(disposition: Disposition) -> Style {
-    match disposition {
-        Disposition::Protected => Style::default().fg(Color::Green),
-        Disposition::Owned => Style::default().fg(Color::Cyan),
-        Disposition::AuthorizedUnscoped => Style::default().fg(Color::Yellow),
-        Disposition::Unowned => Style::default().fg(Color::DarkGray),
-    }
-}
-
-fn disposition_count(plan: &Plan, disposition: Disposition) -> usize {
-    plan.decisions
-        .iter()
-        .filter(|decision| decision.disposition == disposition)
-        .count()
-}
-
-fn kind_disposition_count(plan: &Plan, kind: ResourceKind, disposition: Disposition) -> usize {
-    plan.decisions
-        .iter()
-        .filter(|decision| decision.resource.kind == kind && decision.disposition == disposition)
-        .count()
-}
-
-fn resource_kinds() -> [ResourceKind; 5] {
-    [
-        ResourceKind::Container,
-        ResourceKind::Image,
-        ResourceKind::Volume,
-        ResourceKind::Network,
-        ResourceKind::BuildCache,
-    ]
-}
-
-fn format_age(seconds: Option<u64>) -> String {
-    seconds.map_or_else(
-        || "unknown".to_owned(),
-        |value| humantime::format_duration(Duration::from_secs(value)).to_string(),
+/// An epoch second rendered as a timestamp rather than a raw integer.
+fn format_timestamp(epoch_seconds: i64) -> String {
+    u64::try_from(epoch_seconds).map_or_else(
+        |_| "unknown time".to_owned(),
+        |seconds| {
+            humantime::format_rfc3339_seconds(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
+                .to_string()
+        },
     )
+}
+
+/// A compact age a person reads at a glance: `3d`, `2h`, `5m`, `30s`.
+fn format_age(seconds: Option<u64>) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+
+    let Some(value) = seconds else {
+        return "unknown".to_owned();
+    };
+    if value >= DAY {
+        format!("{}d", value / DAY)
+    } else if value >= HOUR {
+        format!("{}h", value / HOUR)
+    } else if value >= MINUTE {
+        format!("{}m", value / MINUTE)
+    } else {
+        format!("{value}s")
+    }
 }
 
 fn tui_plan_id(config_hash: &str, created_at: i64, plan: &Plan) -> String {
@@ -2540,25 +2842,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn percentage_u64(numerator: u64, denominator: u64) -> u16 {
-    if denominator == 0 {
-        return 0;
-    }
-    let value = u128::from(numerator)
-        .saturating_mul(100)
-        .checked_div(u128::from(denominator))
-        .unwrap_or_default()
-        .min(100);
-    u16::try_from(value).unwrap_or(100)
-}
-
-fn percentage_usize(numerator: usize, denominator: usize) -> u16 {
-    percentage_u64(
-        u64::try_from(numerator).unwrap_or(u64::MAX),
-        u64::try_from(denominator).unwrap_or(u64::MAX),
-    )
-}
-
 fn move_scroll(current: u16, delta: isize) -> u16 {
     let magnitude = u16::try_from(delta.unsigned_abs()).unwrap_or(u16::MAX);
     if delta.is_negative() {
@@ -2592,54 +2875,44 @@ mod tests {
     use super::*;
     use docker_maid::plan::{InventoryItem, ResourceState};
     use ratatui::backend::TestBackend;
+    use std::collections::BTreeMap;
 
-    #[test]
-    fn fuzzy_filter_matches_subsequences_case_insensitively() {
-        assert!(fuzzy_match("Agent-Sandbox-123", "as13"));
-        assert!(fuzzy_match("postgres", "PG"));
-        assert!(!fuzzy_match("volume", "network"));
-    }
-
-    #[tokio::test]
-    async fn the_family_action_writes_one_typed_label_entry_and_toggles_it() {
-        let root = std::env::temp_dir().join(format!(
-            "docker-maid-tui-family-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock after epoch")
-                .as_nanos()
-        ));
-        let paths = StatePaths::new(root.join("state"));
-        let survey = survey_inventory(&[]);
-        let mut app = App {
+    /// One `App`, so a new field does not break every test that builds one.
+    fn test_app(paths: &StatePaths, plan: Plan, view: View) -> App {
+        let survey = survey_inventory(
+            &plan
+                .decisions
+                .iter()
+                .map(|decision| decision.resource.clone())
+                .collect::<Vec<_>>(),
+        );
+        App {
             explicit_config: None,
             loaded: LoadedConfig {
                 path: PathBuf::from("docker_maid.toml"),
                 config: Config::default(),
                 source: "# test config".to_owned(),
             },
-            built_in_config: true,
+            built_in_config: false,
             state_paths: paths.clone(),
             protection_store: ProtectionStore::new(paths.clone()),
             protection: ProtectionState::default(),
-            plan: fixture_plan(),
             plan_id: "test-plan".to_owned(),
+            plan,
             plan_created_at: 1,
             observations: ObservationState::default(),
             config_hash: "test-config".to_owned(),
             plan_validity: PlanValidity::Valid,
             history: Vec::new(),
-            view: View::Inventory,
-            inventory_kind: ResourceKind::Container,
+            view,
             selected: 0,
             filter: String::new(),
             editor: Editor::None,
-            detail_focused: false,
+            detail_open: false,
             overlay: Overlay::None,
             confirm_scroll: 0,
-            activity_scroll: 0,
-            rules_scroll: 0,
+            overlay_scroll: 0,
+            pane_scroll: 0,
             survey,
             configure_selected: BTreeSet::new(),
             configure_row: 0,
@@ -2648,8 +2921,562 @@ mod tests {
             policy_field: 0,
             config_proposal: None,
             prefix_input: String::new(),
-            status: String::new(),
-        };
+            prefix_kind: ResourceKind::Container,
+            status: "ready".to_owned(),
+        }
+    }
+
+    fn temp_paths(label: &str) -> (PathBuf, StatePaths) {
+        let root = std::env::temp_dir().join(format!(
+            "docker-maid-tui-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let paths = StatePaths::new(root.join("state"));
+        (root, paths)
+    }
+
+    /// Everything a key press could visibly move.
+    fn fingerprint(app: &App) -> String {
+        format!(
+            "{:?}|{:?}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}",
+            app.view,
+            app.overlay,
+            app.editor,
+            app.selected,
+            app.filter,
+            app.detail_open,
+            app.confirm_scroll,
+            app.overlay_scroll,
+            app.pane_scroll,
+            app.configure_row,
+            app.policy_field,
+            app.configure_profile,
+            app.status
+        )
+    }
+
+    #[test]
+    fn fuzzy_filter_matches_subsequences_case_insensitively() {
+        assert!(fuzzy_match("Agent-Sandbox-123", "as13"));
+        assert!(fuzzy_match("postgres", "PG"));
+        assert!(!fuzzy_match("volume", "network"));
+    }
+
+    /// The direct fix for the footer that advertised eleven keys, six of which
+    /// did nothing in most views. An advertised key that resolves to no intent
+    /// fails the build.
+    #[test]
+    fn every_advertised_key_resolves_to_an_intent_in_its_own_view() {
+        for view in View::ALL {
+            for hint in hints_for(view, Editor::None, Overlay::None) {
+                for code in hint.codes {
+                    let key = KeyEvent::new(*code, KeyModifiers::NONE);
+                    assert!(
+                        intent_for(view, key).is_some(),
+                        "{view:?} advertises {:?} ({}) but nothing handles it",
+                        code,
+                        hint.label
+                    );
+                }
+            }
+        }
+    }
+
+    /// The complement: a key that changes nothing is as much of a lie as a key
+    /// with no binding, so each advertised key is dispatched for real.
+    #[tokio::test]
+    async fn every_advertised_key_moves_the_application_when_it_is_pressed() {
+        let (root, paths) = temp_paths("keys");
+        for view in View::ALL {
+            for hint in hints_for(view, Editor::None, Overlay::None) {
+                for code in hint.codes {
+                    // Refresh reaches the Docker daemon, and quit ends the loop
+                    // rather than moving state. Both are covered elsewhere.
+                    if matches!(*code, KeyCode::Char('r' | 'q')) {
+                        continue;
+                    }
+                    let mut app = test_app(&paths, fixture_plan(), view);
+                    app.selected = 0;
+                    let before = fingerprint(&app);
+                    let key = KeyEvent::new(*code, KeyModifiers::NONE);
+                    handle_main_key(&mut app, key)
+                        .await
+                        .expect("advertised key is handled");
+                    assert_ne!(
+                        before,
+                        fingerprint(&app),
+                        "{view:?} advertises {:?} ({}) but pressing it changed nothing",
+                        code,
+                        hint.label
+                    );
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn quit_is_advertised_and_really_quits() {
+        for view in View::ALL {
+            assert_eq!(
+                intent_for(view, KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+                Some(Intent::Quit)
+            );
+            assert_eq!(
+                intent_for(view, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+                Some(Intent::Refresh)
+            );
+        }
+        assert!(is_global_quit(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+    }
+
+    /// Every key code this interface binds anywhere.
+    const PROBE_KEYS: &[KeyCode] = &[
+        KeyCode::Char('q'),
+        KeyCode::Char('?'),
+        KeyCode::Char('1'),
+        KeyCode::Char('2'),
+        KeyCode::Char('3'),
+        KeyCode::Char('l'),
+        KeyCode::Char('r'),
+        KeyCode::Char('j'),
+        KeyCode::Char('k'),
+        KeyCode::Char(' '),
+        KeyCode::Char('P'),
+        KeyCode::Char('c'),
+        KeyCode::Char('/'),
+        KeyCode::Char('a'),
+        KeyCode::Char('e'),
+        KeyCode::Char('v'),
+        KeyCode::Char('s'),
+        KeyCode::Char('['),
+        KeyCode::Char(']'),
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Left,
+        KeyCode::Right,
+        KeyCode::Enter,
+        KeyCode::PageUp,
+        KeyCode::PageDown,
+    ];
+
+    /// The other half of an honest key surface. The old footer advertised keys
+    /// that did nothing; this proves the reverse cannot happen either, so a key
+    /// that works is always written down where a person can find it.
+    #[test]
+    fn every_bound_key_is_written_down_in_the_footer_or_in_help() {
+        let documented = HELP_ENTRIES
+            .iter()
+            .flat_map(|(keys, _)| keys.split_whitespace())
+            .collect::<BTreeSet<_>>();
+        for view in View::ALL {
+            let footer = hints_for(view, Editor::None, Overlay::None)
+                .iter()
+                .flat_map(|hint| hint.codes.iter().map(|code| key_symbol(*code)))
+                .collect::<BTreeSet<_>>();
+            for code in PROBE_KEYS {
+                let key = KeyEvent::new(*code, KeyModifiers::NONE);
+                if intent_for(view, key).is_none() {
+                    continue;
+                }
+                let symbol = key_symbol(*code);
+                assert!(
+                    footer.contains(&symbol) || documented.contains(symbol.as_str()),
+                    "{view:?} binds {symbol:?} but neither its footer nor help mentions it"
+                );
+            }
+        }
+    }
+
+    /// A key may mean different things in different views only when the help
+    /// says so once per meaning. `space` protects a resource in Review and
+    /// Keeping and uses a candidate in Setup, and help carries a line for each.
+    /// The old `h/l` pair carried two meanings and one description, which is
+    /// why it could not be learned.
+    #[test]
+    fn a_key_with_more_than_one_meaning_is_described_once_per_meaning() {
+        for code in PROBE_KEYS {
+            let key = KeyEvent::new(*code, KeyModifiers::NONE);
+            let mut meanings = Vec::new();
+            for view in View::ALL {
+                if let Some(intent) = intent_for(view, key) {
+                    if !meanings.contains(&intent) {
+                        meanings.push(intent);
+                    }
+                }
+            }
+            if meanings.len() <= 1 {
+                continue;
+            }
+            let symbol = key_symbol(*code);
+            let described = HELP_ENTRIES
+                .iter()
+                .filter(|(keys, _)| keys.split_whitespace().any(|token| token == symbol))
+                .count();
+            assert!(
+                described >= meanings.len(),
+                "{symbol:?} has {} meanings ({meanings:?}) but only {described} help lines",
+                meanings.len()
+            );
+        }
+    }
+
+    /// Every view's key table has to fit the narrowest terminal this interface
+    /// agrees to draw into, or the footer scrolls a key off the edge.
+    #[test]
+    fn every_key_table_fits_two_lines_at_the_minimum_width() {
+        for view in View::ALL {
+            let lines = hint_lines(hints_for(view, Editor::None, Overlay::None), MIN_WIDTH - 2);
+            assert!(
+                lines.len() <= 2,
+                "{view:?} needs {} footer lines at {MIN_WIDTH} columns",
+                lines.len()
+            );
+            for line in &lines {
+                assert!(line.chars().count() <= usize::from(MIN_WIDTH - 2));
+            }
+        }
+    }
+
+    /// A box that overruns its region by one cell wraps in a real terminal and
+    /// corrupts the line below it, which a fixed-size test buffer hides by
+    /// clipping. So the geometry itself is what gets checked.
+    #[test]
+    fn an_overlay_never_reaches_outside_the_region_that_holds_it() {
+        for width in [60u16, 80, 100, 140, 200] {
+            for height in [20u16, 24, 30, 42, 50] {
+                let body = Rect {
+                    x: 0,
+                    y: 2,
+                    width,
+                    height: height - 5,
+                };
+                for (margin_x, margin_y) in [(0, 0), (1, 0), (2, 0), (3, 1), (2, body.height / 4)] {
+                    let area = overlay_area(body, margin_x, margin_y);
+                    assert!(area.x >= body.x, "{width}x{height} left of body");
+                    assert!(area.y >= body.y, "{width}x{height} above body");
+                    assert!(
+                        area.right() <= body.right(),
+                        "{width}x{height} overruns the right edge by {}",
+                        area.right() - body.right()
+                    );
+                    assert!(
+                        area.bottom() <= body.bottom(),
+                        "{width}x{height} overruns the bottom edge by {}",
+                        area.bottom() - body.bottom()
+                    );
+                    assert!(area.width >= 1 && area.height >= 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plain_words_replace_the_taxonomy_without_touching_the_machine_strings() {
+        assert_eq!(
+            plain_disposition(Disposition::Protected),
+            "you protected this"
+        );
+        assert_eq!(plain_disposition(Disposition::Owned), "a rule covers this");
+        assert_eq!(
+            plain_disposition(Disposition::AuthorizedUnscoped),
+            "you authorized this without a rule"
+        );
+        assert_eq!(
+            plain_disposition(Disposition::Unowned),
+            "no rule covers this"
+        );
+
+        // The frozen machine contract is untouched.
+        assert_eq!(Disposition::Protected.to_string(), "protected");
+        assert_eq!(Disposition::Owned.to_string(), "owned");
+        assert_eq!(
+            Disposition::AuthorizedUnscoped.to_string(),
+            "authorized-unscoped"
+        );
+        assert_eq!(Disposition::Unowned.to_string(), "unowned");
+    }
+
+    #[test]
+    fn reasons_are_split_into_the_clauses_the_planner_already_separated() {
+        let clauses = reason_clauses("matched agent label agents; state age 3d meets 2h");
+        assert_eq!(
+            clauses,
+            vec![
+                "matched agent label agents".to_owned(),
+                "state age 3d meets 2h".to_owned()
+            ]
+        );
+        assert_eq!(reason_clauses("no rule matched"), vec!["no rule matched"]);
+    }
+
+    #[test]
+    fn every_view_renders_at_every_supported_terminal_size() {
+        let (root, paths) = temp_paths("sizes");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        for (width, height) in [(60, 20), (80, 24), (140, 42), (200, 50)] {
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+            for view in View::ALL {
+                app.view = view;
+                app.selected = 0;
+                terminal
+                    .draw(|frame| render(frame, &mut app))
+                    .expect("render view");
+                let rendered = rendered_text(&terminal);
+                assert!(
+                    rendered.contains("docker_maid"),
+                    "{view:?} at {width}x{height}"
+                );
+                assert!(
+                    rendered.contains(view.title()),
+                    "{view:?} title missing at {width}x{height}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Colour is never the only carrier. Both lists print the plain words for
+    /// the dispositions they hold.
+    #[test]
+    fn no_row_depends_on_colour_alone() {
+        let (root, paths) = temp_paths("words");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        let mut terminal = Terminal::new(TestBackend::new(140, 42)).expect("test terminal");
+
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render review");
+        let review = rendered_text(&terminal);
+        assert!(review.contains("WOULD REMOVE"));
+        assert!(review.contains(plain_disposition(Disposition::AuthorizedUnscoped)));
+
+        app.view = View::Keeping;
+        app.selected = 0;
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render keeping");
+        let keeping = rendered_text(&terminal);
+        assert!(keeping.contains("KEEPING"));
+        assert!(keeping.contains(plain_disposition(Disposition::Protected)));
+        assert!(keeping.contains(plain_disposition(Disposition::Unowned)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_terminal_below_the_minimum_says_so_instead_of_drawing_a_broken_layout() {
+        let (root, paths) = temp_paths("small");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        for (width, height) in [(59, 20), (60, 19), (40, 10)] {
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, height)).expect("test terminal");
+            terminal
+                .draw(|frame| render(frame, &mut app))
+                .expect("render small");
+            let rendered = rendered_text(&terminal);
+            assert!(rendered.contains("too small"), "{width}x{height}");
+            assert!(rendered.contains("60"), "{width}x{height}");
+            assert!(!rendered.contains("WOULD REMOVE"), "{width}x{height}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A filter narrows what is read, never what is confirmed. The header says
+    /// so, and the modal still lists the whole set.
+    #[test]
+    fn a_filter_never_narrows_the_set_a_person_confirms() {
+        let (root, paths) = temp_paths("filter");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        let all_targets = app.plan_targets().len();
+        app.filter = "zzz-matches-nothing".to_owned();
+        assert!(app.review_rows().is_empty());
+        assert_eq!(app.plan_targets().len(), all_targets);
+
+        let mut terminal = Terminal::new(TestBackend::new(140, 42)).expect("test terminal");
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render filtered review");
+        assert!(rendered_text(&terminal).contains("hidden by the filter"));
+
+        app.overlay = Overlay::Confirm;
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render confirmation");
+        let confirmation = rendered_text(&terminal);
+        assert!(confirmation.contains("Confirm removal"));
+        assert!(confirmation.contains(&format!("Remove these {all_targets} objects?")));
+        assert_eq!(all_targets, 2, "this fixture must exercise the plural form");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The confirmation used to compute a zero-row list on a short terminal and
+    /// still offer to apply.
+    #[test]
+    fn the_confirmation_always_lists_at_least_one_target_it_would_remove() {
+        let (root, paths) = temp_paths("confirm");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        app.overlay = Overlay::Confirm;
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).expect("test terminal");
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render confirmation");
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Confirm removal"));
+        assert!(rendered.contains("agent-box"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_overlay_renders_and_the_activity_log_is_reachable() {
+        let (root, paths) = temp_paths("overlays");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        let mut terminal = Terminal::new(TestBackend::new(140, 42)).expect("test terminal");
+        for (overlay, expected) in [
+            (Overlay::Help, "keyboard help"),
+            (Overlay::Activity, "Activity log"),
+            (Overlay::Confirm, "Confirm removal"),
+            (Overlay::CacheConfirm, "daemon-wide build cache"),
+            (Overlay::ConfigSave, "Confirm configuration write"),
+        ] {
+            app.overlay = overlay;
+            terminal
+                .draw(|frame| render(frame, &mut app))
+                .expect("render overlay");
+            assert!(
+                rendered_text(&terminal).contains(expected),
+                "{overlay:?} did not render {expected:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The log pane used to scroll past its own last line and show an empty box.
+    #[test]
+    fn the_activity_log_cannot_scroll_past_its_last_line() {
+        let (root, paths) = temp_paths("scroll");
+        let mut app = test_app(&paths, mixed_plan(), View::Review);
+        app.overlay = Overlay::Activity;
+        let last = overlay_line_count(&app).saturating_sub(1);
+        for _ in 0..50 {
+            handle_scrolling_overlay_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            );
+        }
+        assert_eq!(usize::from(app.overlay_scroll), last);
+
+        handle_scrolling_overlay_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.overlay, Overlay::None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// One offset serves two panes, so it has to be put back when the pane
+    /// changes. Otherwise the details pane opens already scrolled, with no key
+    /// in that view able to scroll it back.
+    #[tokio::test]
+    async fn the_pane_scroll_resets_when_the_pane_changes() {
+        let (root, paths) = temp_paths("pane");
+        let mut app = test_app(&paths, mixed_plan(), View::Setup);
+        handle_main_key(
+            &mut app,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        )
+        .await
+        .expect("scroll the preview");
+        assert_ne!(app.pane_scroll, 0);
+
+        handle_main_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("switch view");
+        assert_eq!(
+            app.pane_scroll, 0,
+            "a view switch left the next pane scrolled"
+        );
+
+        app.pane_scroll = 7;
+        handle_main_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("open details");
+        assert_eq!(
+            app.pane_scroll, 0,
+            "the details pane opened already scrolled"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The long generated text in Setup had a scroll offset wired into the
+    /// widget that no key path could move.
+    #[test]
+    fn the_setup_preview_pane_can_be_scrolled() {
+        let key = KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(setup_intent(key), Some(Intent::ScrollPreview(3)));
+        assert_eq!(
+            setup_intent(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            Some(Intent::ScrollPreview(-3))
+        );
+    }
+
+    /// The filter modal rendered the prefix buffer, so it showed whatever the
+    /// last unrelated edit left behind.
+    #[test]
+    fn the_filter_editor_shows_the_filter_and_not_a_stale_buffer() {
+        let (root, paths) = temp_paths("editor");
+        let mut app = test_app(&paths, mixed_plan(), View::Keeping);
+        app.prefix_input = "left-over-prefix".to_owned();
+        app.filter = "agent".to_owned();
+        app.editor = Editor::Filter;
+        let mut terminal = Terminal::new(TestBackend::new(140, 42)).expect("test terminal");
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render filter editor");
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Narrow this list"));
+        assert!(rendered.contains("agent"));
+        assert!(!rendered.contains("left-over-prefix"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn policy_editor_is_visible_in_an_eighty_column_terminal() {
+        let (root, paths) = temp_paths("policy");
+        let mut app = test_app(&paths, mixed_plan(), View::Setup);
+        app.built_in_config = true;
+        app.start_policy_editor();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test terminal");
+
+        terminal
+            .draw(|frame| render(frame, &mut app))
+            .expect("render editor");
+        let rendered = rendered_text(&terminal);
+
+        assert!(rendered.contains("Edit policy value"));
+        assert!(rendered.contains("2h"));
+        assert!(rendered.contains("Enter save"));
+        assert!(rendered.contains("Esc cancel"));
+
+        app.prefix_input = "not-a-duration".to_owned();
+        handle_policy_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.editor, Editor::Policy);
+        assert_eq!(app.configure_policy.stopped_container_ttl, "2h");
+        assert!(app.status.starts_with("Invalid value:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn the_family_action_writes_one_typed_label_entry_and_toggles_it() {
+        let (root, paths) = temp_paths("family");
+        let mut app = test_app(&paths, fixture_plan(), View::Review);
 
         // The action writes typed state and then refreshes. The refresh needs
         // Docker, whose availability this unit test must not depend on, so the
@@ -2668,7 +3495,6 @@ mod tests {
         // fixture the action reads from.
         app.protection = ProtectionState::default();
         app.plan = fixture_plan();
-        app.inventory_kind = ResourceKind::Container;
         app.selected = 0;
         let _ = app.toggle_family_protection().await;
         assert!(ProtectionStore::new(paths)
@@ -2677,15 +3503,14 @@ mod tests {
             .entries
             .is_empty());
 
-        // A resource with no family label is refused with a pointer to `p`.
+        // A resource with no family label is refused with a pointer to `space`.
         // The previous leg refreshed too, so restore the fixture here as well.
         // Without this the assertion quietly depends on the ambient daemon
-        // holding at least one container: against an empty daemon the live plan
-        // carries only the built-in networks, no container survives the kind
-        // filter, and the action reports "No inventory object selected"
-        // instead of the message this leg is about.
+        // holding at least one removal: against an empty daemon the live plan
+        // carries only kept built-in networks, no row survives the Review
+        // filter, and the action reports "Nothing is selected" instead of the
+        // message this leg is about.
         app.plan = fixture_plan();
-        app.inventory_kind = ResourceKind::Container;
         app.selected = 0;
         app.plan.decisions[0].resource.labels.clear();
         app.toggle_family_protection()
@@ -2705,6 +3530,39 @@ mod tests {
         volume.resource.id = "vol".to_owned();
         Plan {
             decisions: vec![sample_decision(), volume],
+        }
+    }
+
+    /// One removal, one protected keep, one unowned keep, and one removal with
+    /// no ownership evidence, so both lists have something of every colour.
+    fn mixed_plan() -> Plan {
+        let mut protected = sample_decision();
+        protected.resource.kind = ResourceKind::Volume;
+        protected.resource.id = "vol".to_owned();
+        protected.resource.name = "keep-me".to_owned();
+        protected.disposition = Disposition::Protected;
+        protected.action = Action::Keep;
+        protected.matched_rule = None;
+        protected.reason = "protected by runtime state".to_owned();
+
+        let mut unowned = sample_decision();
+        unowned.resource.kind = ResourceKind::Network;
+        unowned.resource.id = "net".to_owned();
+        unowned.resource.name = "bridge".to_owned();
+        unowned.disposition = Disposition::Unowned;
+        unowned.action = Action::Keep;
+        unowned.matched_rule = None;
+        unowned.reason = "no rule matched".to_owned();
+
+        let mut unscoped = sample_decision();
+        unscoped.resource.kind = ResourceKind::BuildCache;
+        unscoped.resource.id = "cache".to_owned();
+        unscoped.resource.name = "build-cache".to_owned();
+        unscoped.disposition = Disposition::AuthorizedUnscoped;
+        unscoped.reason = "matched build cache; older than 30d".to_owned();
+
+        Plan {
+            decisions: vec![sample_decision(), protected, unowned, unscoped],
         }
     }
 
@@ -2784,13 +3642,36 @@ mod tests {
     }
 
     #[test]
-    fn inventory_detail_exposes_policy_reason_and_labels() {
+    fn resource_detail_exposes_policy_reason_and_labels() {
         let decision = sample_decision();
-        let detail = inventory_detail(&decision);
+        let detail = resource_detail(&decision);
         assert!(detail.contains("matched agent label"));
         assert!(detail.contains("ai-agent.owner=test"));
         assert!(detail.contains("agents"));
         assert!(detail.contains("workspace → /workspace"));
+        assert!(detail.contains("a rule covers this"));
+    }
+
+    /// Detail panes used to print epoch integers and Rust booleans straight
+    /// out of the struct.
+    #[test]
+    fn no_pane_shows_a_person_a_raw_epoch_or_a_rust_boolean() {
+        assert_eq!(format_timestamp(1_787_013_961), "2026-08-18T00:46:01Z");
+        assert_eq!(format_timestamp(-1), "unknown time");
+        assert_eq!(yes_no(true), "yes");
+        assert_eq!(yes_no(false), "no");
+
+        let detail = resource_detail(&sample_decision());
+        assert!(detail.contains("In use: no"));
+        assert!(detail.contains("Dangling: no"));
+        assert!(
+            !detail.contains("false"),
+            "a Rust boolean reached the screen"
+        );
+        assert!(
+            !detail.contains("true"),
+            "a Rust boolean reached the screen"
+        );
     }
 
     #[test]
@@ -2822,50 +3703,12 @@ mod tests {
         let plan = Plan {
             decisions: vec![sample_decision()],
         };
-        let survey = survey_inventory(
-            &plan
-                .decisions
-                .iter()
-                .map(|decision| decision.resource.clone())
-                .collect::<Vec<_>>(),
-        );
-        let mut app = App {
-            explicit_config: Some(config_path.clone()),
-            loaded: LoadedConfig {
-                path: config_path.clone(),
-                config,
-                source: source.to_owned(),
-            },
-            built_in_config: false,
-            state_paths: paths.clone(),
-            protection_store: ProtectionStore::new(paths.clone()),
-            protection: ProtectionState::default(),
-            plan_id: tui_plan_id("config", 1, &plan),
-            plan,
-            plan_created_at: 1,
-            observations: ObservationState::default(),
-            config_hash: "config".to_owned(),
-            plan_validity: PlanValidity::Valid,
-            history: Vec::new(),
-            view: View::Plan,
-            inventory_kind: ResourceKind::Network,
-            selected: 0,
-            filter: String::new(),
-            editor: Editor::None,
-            detail_focused: false,
-            overlay: Overlay::None,
-            confirm_scroll: 0,
-            activity_scroll: 0,
-            rules_scroll: 0,
-            survey,
-            configure_selected: BTreeSet::new(),
-            configure_row: 0,
-            configure_profile: PolicyProfile::Workstation,
-            configure_policy: PolicyProfile::Workstation.settings(),
-            policy_field: 0,
-            config_proposal: None,
-            prefix_input: String::new(),
-            status: String::new(),
+        let mut app = test_app(&paths, plan, View::Review);
+        app.explicit_config = Some(config_path.clone());
+        app.loaded = LoadedConfig {
+            path: config_path.clone(),
+            config,
+            source: source.to_owned(),
         };
         std::fs::write(&config_path, format!("{source}# changed\n")).expect("change config");
 
@@ -2877,166 +3720,7 @@ mod tests {
         assert!(app.status.contains("Configuration changed"));
         assert!(!paths.activity_file().exists());
         std::fs::remove_file(config_path).expect("remove config");
-        std::fs::remove_dir(root).expect("remove test root");
-    }
-
-    #[test]
-    fn every_view_and_safety_overlay_renders() {
-        let root =
-            std::env::temp_dir().join(format!("docker-maid-tui-render-{}", std::process::id()));
-        let paths = StatePaths::new(root);
-        let plan = Plan {
-            decisions: vec![sample_decision()],
-        };
-        let survey = survey_inventory(
-            &plan
-                .decisions
-                .iter()
-                .map(|decision| decision.resource.clone())
-                .collect::<Vec<_>>(),
-        );
-        let mut app = App {
-            explicit_config: None,
-            loaded: LoadedConfig {
-                path: PathBuf::from("docker_maid.toml"),
-                config: Config::default(),
-                source: "# test config".to_owned(),
-            },
-            built_in_config: false,
-            state_paths: paths.clone(),
-            protection_store: ProtectionStore::new(paths),
-            protection: ProtectionState::default(),
-            plan,
-            plan_id: "test-plan".to_owned(),
-            plan_created_at: 1,
-            observations: ObservationState::default(),
-            config_hash: "test-config".to_owned(),
-            plan_validity: PlanValidity::Valid,
-            history: Vec::new(),
-            view: View::Dashboard,
-            inventory_kind: ResourceKind::Container,
-            selected: 0,
-            filter: String::new(),
-            editor: Editor::None,
-            detail_focused: false,
-            overlay: Overlay::None,
-            confirm_scroll: 0,
-            activity_scroll: 0,
-            rules_scroll: 0,
-            survey,
-            configure_selected: BTreeSet::new(),
-            configure_row: 0,
-            configure_profile: PolicyProfile::Workstation,
-            configure_policy: PolicyProfile::Workstation.settings(),
-            policy_field: 0,
-            config_proposal: None,
-            prefix_input: String::new(),
-            status: "ready".to_owned(),
-        };
-        let backend = TestBackend::new(140, 42);
-        let mut terminal = Terminal::new(backend).expect("test terminal");
-
-        for view in View::ALL {
-            app.view = view;
-            terminal
-                .draw(|frame| render(frame, &mut app))
-                .expect("render view");
-            let rendered = rendered_text(&terminal);
-            assert!(rendered.contains(view.title()), "missing {view:?}");
-            assert!(rendered.contains("docker_maid"));
-        }
-
-        app.view = View::Plan;
-        app.overlay = Overlay::Confirm;
-        terminal
-            .draw(|frame| render(frame, &mut app))
-            .expect("render confirmation");
-        assert!(rendered_text(&terminal).contains("Confirm plan application"));
-
-        app.overlay = Overlay::Help;
-        terminal
-            .draw(|frame| render(frame, &mut app))
-            .expect("render help");
-        assert!(rendered_text(&terminal).contains("keyboard help"));
-    }
-
-    #[test]
-    fn policy_editor_is_visible_in_an_eighty_column_terminal() {
-        let root =
-            std::env::temp_dir().join(format!("docker-maid-tui-editor-{}", std::process::id()));
-        let paths = StatePaths::new(root);
-        let plan = Plan {
-            decisions: vec![sample_decision()],
-        };
-        let survey = survey_inventory(
-            &plan
-                .decisions
-                .iter()
-                .map(|decision| decision.resource.clone())
-                .collect::<Vec<_>>(),
-        );
-        let mut app = App {
-            explicit_config: None,
-            loaded: LoadedConfig {
-                path: PathBuf::from("docker_maid.toml"),
-                config: Config::default(),
-                source: "# test config".to_owned(),
-            },
-            built_in_config: true,
-            state_paths: paths.clone(),
-            protection_store: ProtectionStore::new(paths),
-            protection: ProtectionState::default(),
-            plan,
-            plan_id: "test-plan".to_owned(),
-            plan_created_at: 1,
-            observations: ObservationState::default(),
-            config_hash: "test-config".to_owned(),
-            plan_validity: PlanValidity::Valid,
-            history: Vec::new(),
-            view: View::Configure,
-            inventory_kind: ResourceKind::Container,
-            selected: 0,
-            filter: String::new(),
-            editor: Editor::None,
-            detail_focused: false,
-            overlay: Overlay::None,
-            confirm_scroll: 0,
-            activity_scroll: 0,
-            rules_scroll: 0,
-            survey,
-            configure_selected: BTreeSet::new(),
-            configure_row: 0,
-            configure_profile: PolicyProfile::Workstation,
-            configure_policy: PolicyProfile::Workstation.settings(),
-            policy_field: 0,
-            config_proposal: None,
-            prefix_input: String::new(),
-            status: "ready".to_owned(),
-        };
-        app.start_policy_editor();
-        let backend = TestBackend::new(80, 24);
-        let mut terminal = Terminal::new(backend).expect("test terminal");
-
-        terminal
-            .draw(|frame| render(frame, &mut app))
-            .expect("render editor");
-        let rendered = rendered_text(&terminal);
-
-        assert!(rendered.contains("Edit policy value"));
-        assert!(rendered.contains("2h"));
-        assert!(rendered.contains("Enter save"));
-        assert!(rendered.contains("Esc cancel"));
-
-        assert!(is_global_quit(KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
-        )));
-
-        app.prefix_input = "not-a-duration".to_owned();
-        handle_policy_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.editor, Editor::Policy);
-        assert_eq!(app.configure_policy.stopped_container_ttl, "2h");
-        assert!(app.status.starts_with("Invalid value:"));
+        std::fs::remove_dir_all(root).expect("remove test root");
     }
 
     fn rendered_text(terminal: &Terminal<TestBackend>) -> String {

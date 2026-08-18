@@ -105,7 +105,7 @@ the proposal, and let a human decide.
 | 1 | Dry run found resources it would remove |
 | 2 | An applied pass skipped or failed at least one target |
 | 3 | Configuration missing, unreadable, or invalid |
-| 4 | The interactive dashboard needs a terminal |
+| 4 | The interactive interface needs a terminal |
 | 5 | Docker is unavailable or refused the request |
 | 6 | Protection, observation, or activity state cannot be used safely |
 | 7 | Output or an internal invariant failed |

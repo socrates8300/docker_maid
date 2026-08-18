@@ -54,7 +54,7 @@ that endpoint first.
 docker_maid tui
 ```
 
-If no configuration exists, the TUI opens **Configure**. It reads Docker,
+If no configuration exists, the TUI opens **Setup**. It reads Docker,
 shows exact ownership evidence (agent labels, Compose projects, prefixes
 you type), and writes a reviewed proposal. You do not have to hand-write
 TOML first.
@@ -127,7 +127,7 @@ The deletion contract is the same in the TUI, the tables, and `--json`.
 
 | Command | What it does |
 |---|---|
-| `tui` | Interactive dashboard, configurator, plan review, protect, apply |
+| `tui` | Review what a policy would remove, protect what it should not, set it up |
 | `config default` | Print a commented starter with no active cleanup rule |
 | `config check` / `print` | Validate or normalize a file |
 | `config survey` | Discover exact ownership evidence (read-only) |
@@ -153,25 +153,58 @@ Global flags: `--config <path>`, `--format table|json`, `--json`.
 docker_maid tui
 ```
 
-Five views share the same inventory, plan, protection store, executor,
+Three views share the same inventory, plan, protection store, executor,
 and activity journal as the CLI:
 
-1. **Configure** — select exact agent-label or Compose families.
-2. Change the named profile with `h`/`l`. Edit a duration or cache budget
-   with `[`/`]` and `e`.
-3. `v` builds the before/after plan preview.
-4. `s` writes the config after confirmation. **Plan** refreshes.
-5. **Inventory** shows why each object is owned or protected.
-6. In **Plan**, `y` then `Enter` authorizes that exact plan.
-7. **Activity** lists the resulting actions and reclaimed bytes.
+| View | Key | What it answers |
+|---|---|---|
+| **Review** | `1` | What would be removed, and why. The default. |
+| **Keeping** | `2` | What is safe, and why. Where you protect things. |
+| **Setup** | `3` | Guided configuration from real ownership evidence. |
 
-Keys: `1`–`5` switch views, `j`/`k` move, `/` filters, `c` approves a
-name prefix from the selected object, `p` toggles runtime protection for
-that object, `P` toggles one label for its whole family, `r` refreshes,
-`?` help, `q` quit.
+**Review** is the screen a Docker GUI cannot give you. Each pending
+removal gets three lines: what it is, how old and how big, and the
+policy reason that claimed it:
 
-`p` and `P` write typed runtime state. Neither edits your configuration
-file. Build cache always opens a dedicated unscoped-warning modal.
+```text
+WOULD REMOVE  (2)
+▶ container    agent-box
+       3d old · 120.0 MiB
+       why:  matched agent label ai-agent.owner=ci
+             state age 3d meets 2h
+```
+
+**Keeping** is one compact line per resource and expands the selected
+row, because it routinely holds sixty or more.
+
+Keys, in every view: `1` `2` `3` switch views, `↑` `↓` or `j` `k` move,
+`space` protects or releases the selected object, `P` does the same for
+its whole label family, `enter` opens the details pane, `/` narrows the
+list, `c` approves a name prefix, `a` reviews and applies the removal
+set, `l` opens the activity log, `r` refreshes, `?` help, `q` quit. In
+**Setup**, `←` `→` change the profile and `[` `]` then `e` edit a value,
+`v` previews, `s` saves.
+
+The footer is generated from the same table the key handler reads, so it
+cannot advertise a key that does nothing. A test enforces both
+directions: every advertised key resolves and moves the interface, and
+every bound key appears in the footer or in `?`.
+
+Colour never carries meaning alone. Red is only "would be removed",
+green is only "protected", yellow is only "needs your decision", and
+every coloured row also sits under a heading that says the same thing in
+words. Selection uses reverse video, not a background colour.
+
+A filter narrows what you read, never what you confirm. The confirmation
+modal always lists the full removal set and says how many rows the
+filter is hiding.
+
+Below 60x20 the interface draws one message giving the current and
+required size instead of a layout that cannot hold its own content.
+
+`space` and `P` write typed runtime state. Neither edits your
+configuration file. Build cache always opens a dedicated modal, because
+it carries no ownership evidence at all.
 
 ### Guided configuration without the TUI
 
