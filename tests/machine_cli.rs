@@ -107,6 +107,44 @@ fn config_and_version_json_are_single_versioned_documents() {
     fs::remove_dir_all(root).expect("remove machine test directory");
 }
 
+/// `--help` and `--version` are requests for information, so both exit zero in
+/// either format. The JSON version path was covered from the start; the table
+/// path was not, and it printed the version and then exited 64, which kills any
+/// caller running under `set -e`.
+#[test]
+fn asking_for_help_or_the_version_succeeds_in_either_format() {
+    let root = temp_dir("info-flags");
+
+    for arguments in [
+        vec!["--version"],
+        vec!["-V"],
+        vec!["--help"],
+        vec!["--version", "--format", "json"],
+        vec!["--version", "--json"],
+    ] {
+        let output = run(&root, &arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?} must exit 0, printed {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            !output.stdout.is_empty(),
+            "{arguments:?} must print something"
+        );
+    }
+
+    let table_version = run(&root, &["--version"]);
+    let printed = String::from_utf8(table_version.stdout).expect("UTF-8 version");
+    assert!(
+        printed.contains(env!("CARGO_PKG_VERSION")),
+        "table --version must print the crate version, printed {printed}"
+    );
+
+    fs::remove_dir_all(root).expect("remove machine test directory");
+}
+
 #[test]
 fn json_errors_preserve_exit_codes_and_leave_stdout_empty() {
     let root = temp_dir("errors");

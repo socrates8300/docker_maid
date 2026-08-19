@@ -341,7 +341,14 @@ async fn main() -> ExitCode {
                     result.map_or_else(|write_error| output_error_exit_code(&write_error), |()| 0),
                 );
             }
-            if error.kind() == ErrorKind::DisplayHelp {
+            // `--help` and `--version` answer a question rather than reporting a bad
+            // invocation, so both exit zero. Only the JSON version document is handled
+            // above; without this arm the table path prints the version and then exits
+            // 64, which stops any caller running under `set -e`.
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) {
                 let _ = error.print();
                 return ExitCode::SUCCESS;
             }
