@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
-set -e
-echo "guest run 14 (green after cap release)"
-echo "GUEST-14-OK"
+echo "judge probe 4: hang 1200s vs 12m wall clock"
+echo "JUDGE-P4-START"
+sleep 1200
+echo "JUDGE-P4-NATURAL-END"
