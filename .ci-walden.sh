@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -e
-echo "guest run 6 (post-remediation green)"
+echo "guest run 7 (log-integrity check)"
 uname -a
-echo "GUEST-6"
+echo "GUEST-7"
