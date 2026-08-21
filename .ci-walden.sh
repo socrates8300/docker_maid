@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-set -e
-echo "guest run 9 (green through remediated binary)"
-echo "GUEST-9-OK"
+echo "guest run 10 (tenant failure: exit 7)"
+echo "GUEST-10-BUILD-BROKE"
+exit 7
