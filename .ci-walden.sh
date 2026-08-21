@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
 set -e
-echo "guest green run 2"
-uname -a
-echo "GUEST-GREEN-2"
+echo "guest run 3 (supersede-mid-provision proof)"
+echo "GUEST-3"
