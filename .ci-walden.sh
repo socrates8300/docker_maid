@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
-set -e
-echo "guest run 11 (post caps-reducer green)"
-echo "GUEST-11-OK"
+echo "guest run 12: sleeping 100s for crash window"
+echo "GUEST-12-PRE-CRASH"
+sleep 100
+echo "GUEST-12-POST-SLEEP"
