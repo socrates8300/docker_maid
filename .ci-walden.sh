@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -e
-echo "guest run 8 (post-fix green)"
-echo "GUEST-8-OK"
+echo "guest run 9 (green through remediated binary)"
+echo "GUEST-9-OK"
