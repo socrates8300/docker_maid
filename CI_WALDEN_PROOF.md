@@ -9,3 +9,4 @@ run 8
 run 9
 run 10
 run 11 (restore green head; no run)
+run 11 (spend-cap proof)
