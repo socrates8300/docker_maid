@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
-echo "guest run 7 (log-integrity check)"
+echo "judge probe: failing run"
 uname -a
-echo "GUEST-7"
+echo "JUDGE-RED-1"
+exit 7
