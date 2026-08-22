@@ -3,3 +3,4 @@ battery 2026-08-22T04:28:47Z
 clean battery 2026-08-22T04:58:43Z
 single-run timing 05:11:09
 marketplace timing single 05:23:45
+p50 burst 05:26:55
