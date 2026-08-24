@@ -646,3 +646,10 @@ Dependencies of note: `clap`, `serde`, `toml` / `toml_edit`, `bollard`,
 ## License
 
 [MIT](LICENSE).
+
+## Continuous Integration
+
+This repository runs CI on [ci-walden](https://github.com/socrates8300/ci_walden) — a self-hosted control plane that runs the test suite on an ephemeral cloud machine per push and posts the `ci-walden/full-pipeline` check to GitHub.
+
+- Pushes to `ci-walden-proof` run the full suite (cargo fmt, clippy, test).
+- The `main` branch requires `ci-walden/full-pipeline` to pass before merge.
