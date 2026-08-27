@@ -651,5 +651,6 @@ Dependencies of note: `clap`, `serde`, `toml` / `toml_edit`, `bollard`,
 
 This repository runs CI on [ci-walden](https://github.com/socrates8300/ci_walden) — a self-hosted control plane that runs the test suite on an ephemeral cloud machine per push and posts the `ci-walden/full-pipeline` check to GitHub.
 
-- Pushes to `ci-walden-proof` run the full suite (cargo fmt, clippy, test).
+- The interface file `ci-walden/tenant.sh` is generated from `ci-walden/interface.json`. Do not edit `tenant.sh` by hand.
+- The entry is the developer gate: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test`.
 - The `main` branch requires `ci-walden/full-pipeline` to pass before merge.
