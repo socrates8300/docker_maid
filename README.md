@@ -517,7 +517,7 @@ An image that is not present locally is an error naming the
 
 ### Teach an agent the CLI
 
-`docker_maid init --agents` installs two portable skills compiled into
+`docker_maid init --agents` installs three portable skills compiled into
 the binary. Installing them needs no network, and neither one reads or
 edits your configuration.
 
@@ -525,6 +525,7 @@ edits your configuration.
 |---|---|
 | `docker-maid` | Creating stamped resources and reclaiming them |
 | `docker-maid-config` | Writing, applying, and proving a policy file |
+| `docker-maid-repo` | Per-repository defaults: 12h images/volumes, the keep step |
 
 Each lands at `<skills>/<skill-name>/SKILL.md`.
 
