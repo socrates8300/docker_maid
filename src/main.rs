@@ -1552,6 +1552,7 @@ async fn run_status(
     )
     .map_err(|error| RunError::Internal(format!("cannot build status: {error}")))?;
     let last_pass = ActivityJournal::new(paths).last_completed_pass()?;
+    let daemon = docker_maid::inventory::daemon_identity().await?;
     for rule in regressed_rules(&plan, last_pass.as_ref()) {
         write_warning_diagnostic(
             format,
@@ -1567,12 +1568,17 @@ async fn run_status(
             &plan,
             protection.entries.len(),
             last_pass.as_ref(),
+            &daemon,
         ))?;
     } else {
-        let output = render_status(&plan, protection.entries.len(), last_pass.as_ref());
+        let output = render_status(&plan, protection.entries.len(), last_pass.as_ref(), &daemon);
         write_payload(output.as_bytes())?;
     }
     Ok(RunOutcome::Success)
+}
+
+fn daemon_label(value: Option<&str>) -> &str {
+    value.unwrap_or("unknown")
 }
 
 fn regressed_rules(plan: &Plan, last: Option<&CompletedPass>) -> Vec<String> {
@@ -1598,6 +1604,7 @@ fn render_status(
     plan: &Plan,
     runtime_protection_count: usize,
     last: Option<&CompletedPass>,
+    daemon: &docker_maid::inventory::DaemonIdentity,
 ) -> String {
     let protected = plan
         .decisions
@@ -1620,7 +1627,10 @@ fn render_status(
         .filter(|decision| decision.disposition == Disposition::Unowned)
         .count();
     let mut output = format!(
-        "Inventory: total={}, protected={}, owned={}, authorized-unscoped={}, unowned={}, pending={}\nRuntime protection entries: {runtime_protection_count}\n",
+        "Daemon: {} engine {} ({})\nInventory: total={}, protected={}, owned={}, authorized-unscoped={}, unowned={}, pending={}\nRuntime protection entries: {runtime_protection_count}\n",
+        daemon_label(daemon.name.as_deref()),
+        daemon_label(daemon.server_version.as_deref()),
+        daemon_label(daemon.operating_system.as_deref()),
         plan.decisions.len(),
         protected,
         owned,

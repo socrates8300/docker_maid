@@ -13,6 +13,7 @@ use bollard::query_parameters::{
 };
 use bollard::Docker;
 use futures_util::{stream, StreamExt, TryStreamExt};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::time::UNIX_EPOCH;
@@ -47,6 +48,51 @@ impl std::error::Error for InventoryError {
 }
 
 /// Inventory the Docker resource types required by the validated configuration.
+///
+/// All daemon requests are GET requests. Container inspection is enabled only
+/// when a configured container age policy needs start or finish timestamps.
+///
+/// Identity of the Docker daemon that `docker_maid` actually talks to.
+///
+/// bollard ignores docker CLI contexts, so the CLI may resolve one engine
+/// while `docker_maid` resolves another. This surfaces where the tool is
+/// pointed (`orbstack` vs `docker-desktop` vs colima) via `GET /info`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DaemonIdentity {
+    pub name: Option<String>,
+    pub operating_system: Option<String>,
+    pub server_version: Option<String>,
+    pub kernel_version: Option<String>,
+}
+
+/// Read the daemon's identity through the same connection rules as the
+/// inventory (`DOCKER_HOST`, then the default socket).
+///
+/// # Errors
+///
+/// Returns an error when Docker cannot be reached or `/info` fails.
+pub async fn daemon_identity() -> Result<DaemonIdentity, InventoryError> {
+    let docker = Docker::connect_with_defaults().map_err(|source| InventoryError::Docker {
+        operation: "connection setup".to_owned(),
+        source,
+    })?;
+    let info = docker
+        .info()
+        .await
+        .map_err(|source| InventoryError::Docker {
+            operation: "system info".to_owned(),
+            source,
+        })?;
+    Ok(DaemonIdentity {
+        name: info.name,
+        operating_system: info.operating_system,
+        server_version: info.server_version,
+        kernel_version: info.kernel_version,
+    })
+}
+
+/// Inventory the Docker resource types required by the validated
+/// configuration.
 ///
 /// All daemon requests are GET requests. Container inspection is enabled only
 /// when a configured container age policy needs start or finish timestamps.
