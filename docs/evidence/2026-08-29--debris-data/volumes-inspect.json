@@ -1,0 +1,1216 @@
+[
+    {
+        "CreatedAt": "2026-08-28T13:28:06Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/0ac2c820e5a81ef6ce9f75ab9e44d5747175b38c7f30eeaafbb26dfea586f655/_data",
+        "Name": "0ac2c820e5a81ef6ce9f75ab9e44d5747175b38c7f30eeaafbb26dfea586f655",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:15:25Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/0d750b3b8df45d7b97d4a072229449f16d91a746213a8bd02675f249cc6f3183/_data",
+        "Name": "0d750b3b8df45d7b97d4a072229449f16d91a746213a8bd02675f249cc6f3183",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T19:23:18Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/1ce73a3122a044aa2196ed117b383c64a455930780edb0756f087eda47ee33a5/_data",
+        "Name": "1ce73a3122a044aa2196ed117b383c64a455930780edb0756f087eda47ee33a5",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T23:18:59Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/1d2d20ed2bbbd39a8bf09d21d92981e1aea5bd27f5b477bdd8e9571f7e6400f7/_data",
+        "Name": "1d2d20ed2bbbd39a8bf09d21d92981e1aea5bd27f5b477bdd8e9571f7e6400f7",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:35:36Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/1d7c647f1dc0f2c5ce60b82d3f67e8966f6c3cd212e7fb19de6b719dcacf18fa/_data",
+        "Name": "1d7c647f1dc0f2c5ce60b82d3f67e8966f6c3cd212e7fb19de6b719dcacf18fa",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T00:36:32Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/2a7ae1da35d4dad81eaf82eb67e2e2648a377f4be0081877703f370d118ce5a2/_data",
+        "Name": "2a7ae1da35d4dad81eaf82eb67e2e2648a377f4be0081877703f370d118ce5a2",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T19:35:31Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/2ad8aba31bd44a4fa0fce3a0e0dd93b206b47821efe0c1319a971679280636db/_data",
+        "Name": "2ad8aba31bd44a4fa0fce3a0e0dd93b206b47821efe0c1319a971679280636db",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:47:51Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/2fcec8186deaf4ca72647ca3432bc7743ecf79fdf81898ee11edac03b7a337fe/_data",
+        "Name": "2fcec8186deaf4ca72647ca3432bc7743ecf79fdf81898ee11edac03b7a337fe",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:03:52Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/3d16e23e126c560674dc421c19eddc232a7d342f3e7bcf735af8152c3a6cf0d8/_data",
+        "Name": "3d16e23e126c560674dc421c19eddc232a7d342f3e7bcf735af8152c3a6cf0d8",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T13:46:42Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/3d183e8bc17a0550f44f0ae51de682f58219082d245648352ee387c9ef5cdb73/_data",
+        "Name": "3d183e8bc17a0550f44f0ae51de682f58219082d245648352ee387c9ef5cdb73",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T03:01:24Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/4b4745f89995e24b6c81acf64bbe358661011884c3e7f7ac89e210b944546668/_data",
+        "Name": "4b4745f89995e24b6c81acf64bbe358661011884c3e7f7ac89e210b944546668",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T06:54:28Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/5ab4112e06248ef355a4b3f09fef3a279b51d0c4d7a337665e965977649314ff/_data",
+        "Name": "5ab4112e06248ef355a4b3f09fef3a279b51d0c4d7a337665e965977649314ff",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T06:43:43Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/5ccb38ec047a32407a3a66b4452a2cee947695530c25db9e9caf44a6ce331fca/_data",
+        "Name": "5ccb38ec047a32407a3a66b4452a2cee947695530c25db9e9caf44a6ce331fca",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-03T23:50:11Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/6a1f6209ef8ae8d2fa7d7f8f4a672fd7d290a767927fcb17053c2b7cfe7535b7/_data",
+        "Name": "6a1f6209ef8ae8d2fa7d7f8f4a672fd7d290a767927fcb17053c2b7cfe7535b7",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:22:51Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/6a7bb8bfd4aaf0bac8b7499db9e5311556bdb4936e55ad3e07d4fbbeb3dcd16d/_data",
+        "Name": "6a7bb8bfd4aaf0bac8b7499db9e5311556bdb4936e55ad3e07d4fbbeb3dcd16d",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T23:48:37Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/06d2d07d85aa610746f16675b8276ae8eb3f67448f84c82646b0989a5f52c2a4/_data",
+        "Name": "06d2d07d85aa610746f16675b8276ae8eb3f67448f84c82646b0989a5f52c2a4",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T14:10:39Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/7e5d50db38602abea88a5e687bcbd62a58bed5d034c2d07ee52d4dfa5340ee5b/_data",
+        "Name": "7e5d50db38602abea88a5e687bcbd62a58bed5d034c2d07ee52d4dfa5340ee5b",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:04:53Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/7e7c4aa7ea0eef5262e9826d7cd012136381d608279b2495a9e8d04551b40bd1/_data",
+        "Name": "7e7c4aa7ea0eef5262e9826d7cd012136381d608279b2495a9e8d04551b40bd1",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-15T14:49:40Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/9bfdb65de263a8909c35cd794b925dd3ef688f82337d19e5258ccafed1ff66dd/_data",
+        "Name": "9bfdb65de263a8909c35cd794b925dd3ef688f82337d19e5258ccafed1ff66dd",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:05:47Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/9d4ab11b2ce2f7f6a8109e59a92b378e7585c49a32f03762721cc98cd9526dad/_data",
+        "Name": "9d4ab11b2ce2f7f6a8109e59a92b378e7585c49a32f03762721cc98cd9526dad",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T02:09:53Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/09dd45686f0a53e156f83ccfed659417d9a0c757b8e43ddc32432a44e887fb7d/_data",
+        "Name": "09dd45686f0a53e156f83ccfed659417d9a0c757b8e43ddc32432a44e887fb7d",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T00:20:18Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/26a1f6ff2fa6a302827ae79e41c4607effb1cc67e56df17576b52a91aa5c5fbc/_data",
+        "Name": "26a1f6ff2fa6a302827ae79e41c4607effb1cc67e56df17576b52a91aa5c5fbc",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T06:35:23Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/35e06977a0e02145efd0515add66b3859b5a0633bd6af4dbcb24393bd7edb2d0/_data",
+        "Name": "35e06977a0e02145efd0515add66b3859b5a0633bd6af4dbcb24393bd7edb2d0",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T13:44:09Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/39ef1a18dede5d2a237ebb5cc6c7793182f7f97080f92e323908fcc2a5246e72/_data",
+        "Name": "39ef1a18dede5d2a237ebb5cc6c7793182f7f97080f92e323908fcc2a5246e72",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T19:10:24Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/48c815094bbeea2c2ca0b6de76b1e118793b44b7456aadba71827b0eb3dbd280/_data",
+        "Name": "48c815094bbeea2c2ca0b6de76b1e118793b44b7456aadba71827b0eb3dbd280",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:05:57Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/50d98bb3027ecda63a8b60aa32723916b381e721c5d6ab4b8d13e3a2f86595f1/_data",
+        "Name": "50d98bb3027ecda63a8b60aa32723916b381e721c5d6ab4b8d13e3a2f86595f1",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-03T16:44:28Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/64f16c05d301eebaf71b2886f2a3de40863860021ccfb3bbc01be062eeeba06a/_data",
+        "Name": "64f16c05d301eebaf71b2886f2a3de40863860021ccfb3bbc01be062eeeba06a",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-17T14:18:11Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/68a82fba4aabb6525a4bb013fc645ca92b56a2734ddf25836fc5d5203df667b7/_data",
+        "Name": "68a82fba4aabb6525a4bb013fc645ca92b56a2734ddf25836fc5d5203df667b7",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T02:59:07Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/74efe2bc35819529b938b20872bfdf1f3a50939bc2cd0c75775fa9c2748da19e/_data",
+        "Name": "74efe2bc35819529b938b20872bfdf1f3a50939bc2cd0c75775fa9c2748da19e",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T02:57:33Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/75adad762eb1b35e4dfc83214f1a3e21372eb2433122f5f80d637a53f1514c30/_data",
+        "Name": "75adad762eb1b35e4dfc83214f1a3e21372eb2433122f5f80d637a53f1514c30",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:06:25Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/408f41cbbc6d90db9c588315b6053ffcbad1bf1e1ddfd94551d0f8c76c2fcf3e/_data",
+        "Name": "408f41cbbc6d90db9c588315b6053ffcbad1bf1e1ddfd94551d0f8c76c2fcf3e",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T14:12:45Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/883bdc6b532df8d07f1c25d519690050f1d185f1acb9363083135d4494e00ca0/_data",
+        "Name": "883bdc6b532df8d07f1c25d519690050f1d185f1acb9363083135d4494e00ca0",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T13:27:22Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/1303a8c05de67f14fcb7236b54d943fb9d491c0bce670e81a7106384b5c35b3a/_data",
+        "Name": "1303a8c05de67f14fcb7236b54d943fb9d491c0bce670e81a7106384b5c35b3a",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-05T19:57:37Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/4066b6d352e482de8eb9ed7c929e8ec1e24ca65012b384b19fc60ab588c25934/_data",
+        "Name": "4066b6d352e482de8eb9ed7c929e8ec1e24ca65012b384b19fc60ab588c25934",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T13:48:01Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/12800b223e7b207917683163f5898655248756126f2c386d6eff3b401989d507/_data",
+        "Name": "12800b223e7b207917683163f5898655248756126f2c386d6eff3b401989d507",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:22:37Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/28658d93a256e9c167804aeb232c0b0bcadba6e4db744796db52ab816a7f9666/_data",
+        "Name": "28658d93a256e9c167804aeb232c0b0bcadba6e4db744796db52ab816a7f9666",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:21:48Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/51189a57a3b4e0f820a1207f3edfa9c429a6ac1d4fe58295c85183f889912a95/_data",
+        "Name": "51189a57a3b4e0f820a1207f3edfa9c429a6ac1d4fe58295c85183f889912a95",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:23:14Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/205819d0f97b6c1f8d8921d30b95e01a5d71194359ab03123afe66418abebe45/_data",
+        "Name": "205819d0f97b6c1f8d8921d30b95e01a5d71194359ab03123afe66418abebe45",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-17T14:17:58Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/4465911ee3da4ebd70350daa80faee469514fa564542e80a792a5ebc56a875fb/_data",
+        "Name": "4465911ee3da4ebd70350daa80faee469514fa564542e80a792a5ebc56a875fb",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:22:18Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/95120536a07d13f5d6c25cc0d81355fedaec826acdc389d449bfb52816df2ef4/_data",
+        "Name": "95120536a07d13f5d6c25cc0d81355fedaec826acdc389d449bfb52816df2ef4",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:44:59Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/a2eef2be7dbb196452ad7274b4ae787a58316395a2778c7f14ebec33d860ddfc/_data",
+        "Name": "a2eef2be7dbb196452ad7274b4ae787a58316395a2778c7f14ebec33d860ddfc",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T13:32:54Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/a5e2976754d9db3661a5c70944befffbef8df60f7dd1476787ef7b13984492c3/_data",
+        "Name": "a5e2976754d9db3661a5c70944befffbef8df60f7dd1476787ef7b13984492c3",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T03:24:14Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/a80a65751421fc504ac6d042941bda1d2bdf553846caef33b007207a85f6269e/_data",
+        "Name": "a80a65751421fc504ac6d042941bda1d2bdf553846caef33b007207a85f6269e",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:06:08Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/a92e6974bbbe0219f16c9d62072f3c736c8a4e8edee19a06fcb3727f767f2ce0/_data",
+        "Name": "a92e6974bbbe0219f16c9d62072f3c736c8a4e8edee19a06fcb3727f767f2ce0",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:23:32Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/a2746b6599d97ac1dfd6707a851d44f991b0987c3c3db134e4dbdefb438ca48c/_data",
+        "Name": "a2746b6599d97ac1dfd6707a851d44f991b0987c3c3db134e4dbdefb438ca48c",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:23:58Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/aca3fc99f7b35190bfdedfbfe5a8ba4c4a88f485c3c01f9fcde30b7239eae954/_data",
+        "Name": "aca3fc99f7b35190bfdedfbfe5a8ba4c4a88f485c3c01f9fcde30b7239eae954",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-23T00:25:55Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/aebaab5cb964b3fd1d9459c2a4b84bb59b4b11c55e18c599c6d680b13da8e68c/_data",
+        "Name": "aebaab5cb964b3fd1d9459c2a4b84bb59b4b11c55e18c599c6d680b13da8e68c",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-31T00:36:39Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "f2910deec87d5b977b390dbfd5ec839b3287b4c57466f6a74b88b50f2bd323f3",
+            "com.docker.compose.project": "arlisarangocom",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "mysql-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/arlisarangocom_mysql-data/_data",
+        "Name": "arlisarangocom_mysql-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-31T00:36:39Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "bdda32f383cf588af5e4d2192fa118e71f11491ba77236b25c3f714e2dd259a8",
+            "com.docker.compose.project": "arlisarangocom",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "wordpress-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/arlisarangocom_wordpress-data/_data",
+        "Name": "arlisarangocom_wordpress-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:04:07Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/b84c4030170541342b7ff968282f9dd4457af7b67e3af28de519c327c0e086b3/_data",
+        "Name": "b84c4030170541342b7ff968282f9dd4457af7b67e3af28de519c327c0e086b3",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:49:45Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/bb1ed986c7e7de0afde384afbd1dba12c5c94e60dd1b59558729f8fcb33541c3/_data",
+        "Name": "bb1ed986c7e7de0afde384afbd1dba12c5c94e60dd1b59558729f8fcb33541c3",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:05:22Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/bec7076d832989a0bdb632eea1d00952992d395c4d57541b181637d5c5f6327c/_data",
+        "Name": "bec7076d832989a0bdb632eea1d00952992d395c4d57541b181637d5c5f6327c",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:22:30Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/bedb254b9825bce96fefd2afa298bee7e47df198ef12bcd6d34381400fb1cc0c/_data",
+        "Name": "bedb254b9825bce96fefd2afa298bee7e47df198ef12bcd6d34381400fb1cc0c",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T07:01:38Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/c37a044fe92764e8b5cd217b0804d138f6d18c2b492072bb3dd2a1a5b507df8e/_data",
+        "Name": "c37a044fe92764e8b5cd217b0804d138f6d18c2b492072bb3dd2a1a5b507df8e",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:06:51Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/c70de2d5d6c6b1703d704b8ee669adb6ba3e8a89e4198f4400146064067d41af/_data",
+        "Name": "c70de2d5d6c6b1703d704b8ee669adb6ba3e8a89e4198f4400146064067d41af",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T19:24:28Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/cab9f9601c3d7ae3643a5d9e754c44f1f1c660f0cae0aded4d5d231c744a43d3/_data",
+        "Name": "cab9f9601c3d7ae3643a5d9e754c44f1f1c660f0cae0aded4d5d231c744a43d3",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T23:49:00Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/ccd76dcf04574a64aec29d2697c068555e9a8ffd5977cf22b087b36f91776449/_data",
+        "Name": "ccd76dcf04574a64aec29d2697c068555e9a8ffd5977cf22b087b36f91776449",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-03T16:44:00Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/cf6eea9ee79575ad844d5799d93aa1379744df34dfdff0fa21eae8638ab02d52/_data",
+        "Name": "cf6eea9ee79575ad844d5799d93aa1379744df34dfdff0fa21eae8638ab02d52",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T02:37:18Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/cf8e10263bdef5d670c147eccfa2847ba2a7fb5380dce37b5d01645844da3162/_data",
+        "Name": "cf8e10263bdef5d670c147eccfa2847ba2a7fb5380dce37b5d01645844da3162",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T02:09:49Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "a72cefcdee43b09a55ad072fcf765739d2fb7f31e65ccc129a4edebd05bf33c5",
+            "com.docker.compose.project": "crm",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "app_data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/crm_app_data/_data",
+        "Name": "crm_app_data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T02:09:47Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "de488f6ec55b3af87badf574e0c6898db3711fef10242ca2795a253884318002",
+            "com.docker.compose.project": "crm",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "postgres_data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/crm_postgres_data/_data",
+        "Name": "crm_postgres_data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T02:09:49Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "c3aa6f8cbcdf0c1e274b7114adcb0931e48cd136a30bba539696fc01530811aa",
+            "com.docker.compose.project": "crm",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "whatsapp_outbox"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/crm_whatsapp_outbox/_data",
+        "Name": "crm_whatsapp_outbox",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T02:09:49Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "0f3c638b02eb864d8f4966e6a2ddc994b60e471395f28a046264a7021b2e2b31",
+            "com.docker.compose.project": "crm",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "whatsapp_session"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/crm_whatsapp_session/_data",
+        "Name": "crm_whatsapp_session",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T02:00:46Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d2a7276e73aa06dda9d70e248a2694041b229de2ad3fcb0d43f1249c5ed958c8/_data",
+        "Name": "d2a7276e73aa06dda9d70e248a2694041b229de2ad3fcb0d43f1249c5ed958c8",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T13:27:50Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d2ff3b64bf56b3a46e8690507c1fc0a386514e06116670b0a26789b507e7f215/_data",
+        "Name": "d2ff3b64bf56b3a46e8690507c1fc0a386514e06116670b0a26789b507e7f215",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-17T14:18:23Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d5f5c3df674275d4a83bbed5875a88a04a93642b951eafbc3ed9151db09b724b/_data",
+        "Name": "d5f5c3df674275d4a83bbed5875a88a04a93642b951eafbc3ed9151db09b724b",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:05:36Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d7cbb44f3784f0feec043b04d60a9a1ed5dd4f9ed6dccd012533401a6301af9d/_data",
+        "Name": "d7cbb44f3784f0feec043b04d60a9a1ed5dd4f9ed6dccd012533401a6301af9d",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:05:27Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d38f087de8efd26766c3d8c7aaa680d74abb926221cd010c1c98df1195ad0bce/_data",
+        "Name": "d38f087de8efd26766c3d8c7aaa680d74abb926221cd010c1c98df1195ad0bce",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-05T22:40:16Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d219d6e1d9428a1a424432e6f263641c9715ea1f4cf4097c2bd6ee0b52caac05/_data",
+        "Name": "d219d6e1d9428a1a424432e6f263641c9715ea1f4cf4097c2bd6ee0b52caac05",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-23T00:25:54Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d30274afd6dd2847d8240634fe141279339ab0217603f8975b3205332172a8a2/_data",
+        "Name": "d30274afd6dd2847d8240634fe141279339ab0217603f8975b3205332172a8a2",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:06:37Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/d81515eabf27a79d2b5e92c64d134f93276c85d293f392534f5a47c81c655275/_data",
+        "Name": "d81515eabf27a79d2b5e92c64d134f93276c85d293f392534f5a47c81c655275",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-27T20:29:41Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/dac648f101e0350140a232295572df304c1a9b4c1f952c934c69dc4f924bb8ab/_data",
+        "Name": "dac648f101e0350140a232295572df304c1a9b4c1f952c934c69dc4f924bb8ab",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-05T21:01:46Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/dbb00eaf1a8fb273610f5b755d97f548d7ab0fd46436bd8a71173a33c9d70256/_data",
+        "Name": "dbb00eaf1a8fb273610f5b755d97f548d7ab0fd46436bd8a71173a33c9d70256",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:05:12Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/de7b7f2415ead9aaced9752c3fd8c51ef91447aa0625b497b7cc5572842bda17/_data",
+        "Name": "de7b7f2415ead9aaced9752c3fd8c51ef91447aa0625b497b7cc5572842bda17",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-03T17:41:02Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "400a99ab2c2bc98191315751b686422d6abda71c368b7d7738d55d9e501b5e0c",
+            "com.docker.compose.project": "descuentixco",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/descuentixco_starter-postgres-data/_data",
+        "Name": "descuentixco_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T10:23:26Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/dff6d9043f13fd8113af9df87714aea8ee2722f8864dc3ee3ddba872577d5453/_data",
+        "Name": "dff6d9043f13fd8113af9df87714aea8ee2722f8864dc3ee3ddba872577d5453",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T18:48:29Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/e5c4451f03ac43d4eb9b54a04db791c2746c38316b267ee2d6693403c05ae490/_data",
+        "Name": "e5c4451f03ac43d4eb9b54a04db791c2746c38316b267ee2d6693403c05ae490",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T02:01:10Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/e106698b0dada8e6e2924cc503c5e80bb184d6b7faa0be022c5ddcd9e9b8c315/_data",
+        "Name": "e106698b0dada8e6e2924cc503c5e80bb184d6b7faa0be022c5ddcd9e9b8c315",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-29T02:58:38Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/eb7ae029f0c26d13dcd26dc518646728c2ea227df074cfad58561c2b3765a8b3/_data",
+        "Name": "eb7ae029f0c26d13dcd26dc518646728c2ea227df074cfad58561c2b3765a8b3",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-03T16:44:42Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/ee5f5211044bda7c68b8e4f38b743c887bcf29fecc1eef93dea72baf399b558d/_data",
+        "Name": "ee5f5211044bda7c68b8e4f38b743c887bcf29fecc1eef93dea72baf399b558d",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-11T12:50:15Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "6ee4c7e716dc5a3558b33b2079633d7b4361598f93d2de47dba77212613b62b6",
+            "com.docker.compose.project": "email_cert_01_walden",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/email_cert_01_walden_starter-postgres-data/_data",
+        "Name": "email_cert_01_walden_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-11T12:51:46Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "8f8b2301a2a86e66444ad1eaded725268953e0f41ac86480b1635f3f439e5192",
+            "com.docker.compose.project": "email_cert_02_walden",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/email_cert_02_walden_starter-postgres-data/_data",
+        "Name": "email_cert_02_walden_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-11T12:53:05Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "1e6a1605baa79fa695a440a19b20d69d31bd2777b9fed19390685c37b770a5d2",
+            "com.docker.compose.project": "email_cert_03_walden",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/email_cert_03_walden_starter-postgres-data/_data",
+        "Name": "email_cert_03_walden_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:03:18Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/f20fdcb4ccee7ae8a9744542695de6acbfcaf8c9971bad8ee1dbc99e4200cd45/_data",
+        "Name": "f20fdcb4ccee7ae8a9744542695de6acbfcaf8c9971bad8ee1dbc99e4200cd45",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T22:04:01Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/f364f9c7769fd9652740fee9e5d95e88fa9b87e428610f0d54dbb7be8e2055d4/_data",
+        "Name": "f364f9c7769fd9652740fee9e5d95e88fa9b87e428610f0d54dbb7be8e2055d4",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-28T23:22:34Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.volume.anonymous": ""
+        },
+        "Mountpoint": "/var/lib/docker/volumes/f1389c6dd8ab816a0819863c42ef6f767fee10beb2b44ed6696cdb827fb02450/_data",
+        "Name": "f1389c6dd8ab816a0819863c42ef6f767fee10beb2b44ed6696cdb827fb02450",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-02T22:19:41Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "a5e3000ff39114d82445b9714a8b6082008003845fdea997f45be08cbed1f461",
+            "com.docker.compose.project": "founder-billing-ui",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/founder-billing-ui_starter-postgres-data/_data",
+        "Name": "founder-billing-ui_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T03:18:55Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "3becad8ffeda229ec23dad0027f1d1ea32a6d8ff48b3b2a16d0ae3ac6dd301ca",
+            "com.docker.compose.project": "fresh-app-v2",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/fresh-app-v2_starter-postgres-data/_data",
+        "Name": "fresh-app-v2_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-07T16:25:00Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "27112a8eb0edd5ed2778fdb8738cb99d8edc9041ab38cb9be1e0194767ecc2b3",
+            "com.docker.compose.project": "fresh-final-5d579d6",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/fresh-final-5d579d6_starter-postgres-data/_data",
+        "Name": "fresh-final-5d579d6_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-06T02:41:15Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "af64bc115400e560e2bbcace186f28d2d7a719d7e29c0537dece137567ef7a23",
+            "com.docker.compose.project": "generated-app",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/generated-app_starter-postgres-data/_data",
+        "Name": "generated-app_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-15T04:30:00Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "b746e9c4240b6ecec93e1af24bdc53e18955f49b93c616e5f2d77756a1680d71",
+            "com.docker.compose.project": "marketingops",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/marketingops_starter-postgres-data/_data",
+        "Name": "marketingops_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-25T19:45:50Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "5221f44fe30f70bb82bb35772a07a6ae98c449936e7f60d04581e067e37d43fc",
+            "com.docker.compose.project": "openseo",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "openseo_data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/openseo_data/_data",
+        "Name": "openseo_data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-19T10:20:34Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "bd2e553d4fd87381136397019af22e4d0e11d3974aabb3b6501254a1ee021045",
+            "com.docker.compose.project": "papasito-dev",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "app_postgres_data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/papasito-dev_postgres_data/_data",
+        "Name": "papasito-dev_postgres_data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-19T10:20:34Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "c644bab5f3e418c6874283438bc70f2061028250115ce51df38ffd92115c135a",
+            "com.docker.compose.project": "papasito-dev",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "app_redis_data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/papasito-dev_redis_data/_data",
+        "Name": "papasito-dev_redis_data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-14T14:47:34Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "c3f8e768947f89611329b0ee134b37a1bf258ea5ea632710fe5df411189003c9",
+            "com.docker.compose.project": "repo",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/repo_starter-postgres-data/_data",
+        "Name": "repo_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-21T08:19:02Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "9687f160e84813c78ff5b350b658f6af97907236f63676726408f22a4eadfd26",
+            "com.docker.compose.project": "reset_path-marketingops-proof",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/reset_path-marketingops-proof_starter-postgres-data/_data",
+        "Name": "reset_path-marketingops-proof_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-01T19:33:04Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "b416512f7bc34f1c7bade8208b1bc5f8ba0f91c11ba6d7c08fbaf30e291516e4",
+            "com.docker.compose.project": "reset_path",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/reset_path_starter-postgres-data/_data",
+        "Name": "reset_path_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-04T16:00:10Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "7c2dcfae17c4fb8e6b10d647d54a62c91a628573e6f2d092e3a810fb2374bb16",
+            "com.docker.compose.project": "walden-marketingops-clone5cwntv",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/walden-marketingops-clone5cwntv_starter-postgres-data/_data",
+        "Name": "walden-marketingops-clone5cwntv_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-14T15:05:06Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "cb1967e320f332da5a2328ee4b1e6958287bb015c232b9a37ad4990a43051da1",
+            "com.docker.compose.project": "walden-starter-app-proof",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/walden-starter-app-proof_starter-postgres-data/_data",
+        "Name": "walden-starter-app-proof_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-19T09:45:28Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "6aab43d35deef8b0a9fa59acd5d51775cd9805d818d75dab4a374814840ea727",
+            "com.docker.compose.project": "walden_management",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "walden_miniodata"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/walden_management_walden_miniodata/_data",
+        "Name": "walden_management_walden_miniodata",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-19T09:45:28Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "8460e76294c1a068ab25cbd688391bd15c48576f6d8d38e891869d9a63751a24",
+            "com.docker.compose.project": "walden_management",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "walden_pgdata"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/walden_management_walden_pgdata/_data",
+        "Name": "walden_management_walden_pgdata",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-08-19T09:45:28Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "a89717b0c9cec3e21c0d656e11f2404f83b9fe8587b074382e616e88a24adc18",
+            "com.docker.compose.project": "walden_management",
+            "com.docker.compose.version": "5.3.1",
+            "com.docker.compose.volume": "walden_redisdata"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/walden_management_walden_redisdata/_data",
+        "Name": "walden_management_walden_redisdata",
+        "Options": null,
+        "Scope": "local"
+    },
+    {
+        "CreatedAt": "2026-07-09T23:23:11Z",
+        "Driver": "local",
+        "Labels": {
+            "com.docker.compose.config-hash": "7f4c029194dffae25a305aae69090c26a9976b050e1859ccac83e961bf2244a1",
+            "com.docker.compose.project": "walden_starter",
+            "com.docker.compose.version": "5.3.0",
+            "com.docker.compose.volume": "starter-postgres-data"
+        },
+        "Mountpoint": "/var/lib/docker/volumes/walden_starter_starter-postgres-data/_data",
+        "Name": "walden_starter_starter-postgres-data",
+        "Options": null,
+        "Scope": "local"
+    }
+]

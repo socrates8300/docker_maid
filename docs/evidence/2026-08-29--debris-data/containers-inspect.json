@@ -1,0 +1,666 @@
+[
+    {
+        "Id": "78a127b195447e1af7b2b432c4d643474162944bf542f628d253c565b766d40e",
+        "Created": "2026-08-25T20:21:46.328412879Z",
+        "Path": "docker-entrypoint.sh",
+        "Args": [
+            "sh",
+            "docker-entrypoint.sh"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 866,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-08-29T08:29:09.580956086Z",
+            "FinishedAt": "2026-08-29T08:29:08.652307627Z",
+            "Health": {
+                "Status": "healthy",
+                "FailingStreak": 0,
+                "Log": [
+                    {
+                        "Start": "2026-08-29T12:35:11.39141671Z",
+                        "End": "2026-08-29T12:35:11.48806196Z",
+                        "ExitCode": 0,
+                        "Output": ""
+                    },
+                    {
+                        "Start": "2026-08-29T12:35:41.490522085Z",
+                        "End": "2026-08-29T12:35:41.565852627Z",
+                        "ExitCode": 0,
+                        "Output": ""
+                    },
+                    {
+                        "Start": "2026-08-29T12:36:11.56856521Z",
+                        "End": "2026-08-29T12:36:11.663592918Z",
+                        "ExitCode": 0,
+                        "Output": ""
+                    },
+                    {
+                        "Start": "2026-08-29T12:36:41.670024585Z",
+                        "End": "2026-08-29T12:36:41.756516835Z",
+                        "ExitCode": 0,
+                        "Output": ""
+                    },
+                    {
+                        "Start": "2026-08-29T12:37:11.761237085Z",
+                        "End": "2026-08-29T12:37:11.86489646Z",
+                        "ExitCode": 0,
+                        "Output": ""
+                    }
+                ]
+            }
+        },
+        "Image": "sha256:6edd6aa07b1411f3cf724df03a4178699b7387448eb46560722ba7d855f35a4b",
+        "ResolvConfPath": "/var/lib/docker/containers/78a127b195447e1af7b2b432c4d643474162944bf542f628d253c565b766d40e/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/78a127b195447e1af7b2b432c4d643474162944bf542f628d253c565b766d40e/hostname",
+        "HostsPath": "/var/lib/docker/containers/78a127b195447e1af7b2b432c4d643474162944bf542f628d253c565b766d40e/hosts",
+        "LogPath": "/var/lib/docker/containers/78a127b195447e1af7b2b432c4d643474162944bf542f628d253c565b766d40e/78a127b195447e1af7b2b432c4d643474162944bf542f628d253c565b766d40e-json.log",
+        "Name": "/openseo",
+        "RestartCount": 0,
+        "Driver": "overlayfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "openseo_data:/app/.wrangler:rw"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "devnginx_edge_net",
+            "PortBindings": {
+                "3001/tcp": [
+                    {
+                        "HostIp": "127.0.0.1",
+                        "HostPort": "47823"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "unless-stopped",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": [],
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "Storage": {
+            "RootFS": {
+                "Snapshot": {
+                    "Name": "overlayfs"
+                }
+            }
+        },
+        "Mounts": [
+            {
+                "Type": "volume",
+                "Name": "openseo_data",
+                "Source": "/var/lib/docker/volumes/openseo_data/_data",
+                "Destination": "/app/.wrangler",
+                "Driver": "local",
+                "Mode": "rw",
+                "RW": true,
+                "Propagation": ""
+            }
+        ],
+        "Config": {
+            "Hostname": "openseo",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "ExposedPorts": {
+                "3001/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "DATAFORSEO_API_KEY=ZGF0YWZvcnNlby45Y3U5ZEBwYXNzbWFpbC5uZXQ6MDdmZDIzYTZiNDU5MjlkMg==",
+                "ALLOWED_HOST=seo.waldenpuddle.net",
+                "PORT=3001",
+                "OPENSEO_TELEMETRY_DISABLED=1",
+                "DO_NOT_TRACK=1",
+                "VITE_SHOW_DEVTOOLS=false",
+                "CLOUDFLARE_INCLUDE_PROCESS_ENV=true",
+                "AUTH_MODE=local_noauth",
+                "PATH=/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "NODE_VERSION=22.23.2",
+                "YARN_VERSION=1.22.22",
+                "PNPM_HOME=/pnpm"
+            ],
+            "Cmd": [
+                "sh",
+                "docker-entrypoint.sh"
+            ],
+            "Healthcheck": {
+                "Test": [
+                    "CMD-SHELL",
+                    "node -e \"fetch('http://127.0.0.1:'+(process.env.PORT||3001)+'/api/health').then(function(r){process.exit(r.ok?0:1)}).catch(function(){process.exit(1)})\""
+                ],
+                "Interval": 30000000000,
+                "Timeout": 10000000000,
+                "StartPeriod": 300000000000,
+                "Retries": 3
+            },
+            "Image": "ghcr.io/every-app/open-seo:latest",
+            "Volumes": null,
+            "WorkingDir": "/app",
+            "Entrypoint": [
+                "docker-entrypoint.sh"
+            ],
+            "Labels": {
+                "com.docker.compose.config-hash": "f38e4f128ff08d54622b77a341f51d4477de20115609d31939f6735e2b141c8b",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.depends_on": "",
+                "com.docker.compose.image": "sha256:6edd6aa07b1411f3cf724df03a4178699b7387448eb46560722ba7d855f35a4b",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "openseo",
+                "com.docker.compose.project.config_files": "/Users/jamesr/docker/openseo/compose.yaml",
+                "com.docker.compose.project.working_dir": "/Users/jamesr/docker/openseo",
+                "com.docker.compose.replace": "openseo",
+                "com.docker.compose.service": "openseo",
+                "com.docker.compose.version": "5.3.1",
+                "org.opencontainers.image.created": "2026-08-24T00:19:42.443Z",
+                "org.opencontainers.image.description": "Open source alternative to Semrush and Ahrefs",
+                "org.opencontainers.image.licenses": "MIT",
+                "org.opencontainers.image.revision": "c469a48ae90ab58413b198fe3d1ac1aa90a9b070",
+                "org.opencontainers.image.source": "https://github.com/every-app/open-seo",
+                "org.opencontainers.image.title": "open-seo",
+                "org.opencontainers.image.url": "https://github.com/every-app/open-seo",
+                "org.opencontainers.image.version": "main",
+                "org.walden.persistent": "true"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "be2a117205e90b64f4222dcb7894510f80f7b77a918d2a977be493ae08197674",
+            "SandboxKey": "/var/run/docker/netns/be2a117205e9",
+            "Ports": {
+                "3001/tcp": [
+                    {
+                        "HostIp": "127.0.0.1",
+                        "HostPort": "47823"
+                    }
+                ]
+            },
+            "Networks": {
+                "devnginx_edge_net": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": [
+                        "openseo",
+                        "openseo"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "a2854668e121b13f36c0dc598b5d1d0c0c1fda55f7dc91a79f3de8eed98db70c",
+                    "EndpointID": "cc746c1b31d9d503a0f0885e73aed265f1bbfcb31f2db19939e7aebe81bcbc5c",
+                    "Gateway": "172.20.0.1",
+                    "IPAddress": "172.20.0.3",
+                    "MacAddress": "22:1b:02:3b:df:9a",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "openseo",
+                        "78a127b19544"
+                    ]
+                }
+            }
+        },
+        "ImageManifestDescriptor": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:acaa1444da1c1e3e49631c55bd80970f973e3907649d8aae9326977e31bf6df4",
+            "size": 2780,
+            "platform": {
+                "architecture": "arm64",
+                "os": "linux"
+            }
+        }
+    },
+    {
+        "Id": "41cb4070c6df4067dcde97dcfd30ba6c5dfb62bcd34682fb895cddde55202356",
+        "Created": "2026-07-18T17:43:54.797689802Z",
+        "Path": "angie",
+        "Args": [
+            "-g",
+            "daemon off;"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 867,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-08-29T08:29:09.584329752Z",
+            "FinishedAt": "2026-08-29T08:29:08.65237396Z"
+        },
+        "Image": "sha256:21b7291f4c873f7a20f5d985b43724163d22e1ddf0b4fcbc6d3def4ac340fa43",
+        "ResolvConfPath": "/var/lib/docker/containers/41cb4070c6df4067dcde97dcfd30ba6c5dfb62bcd34682fb895cddde55202356/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/41cb4070c6df4067dcde97dcfd30ba6c5dfb62bcd34682fb895cddde55202356/hostname",
+        "HostsPath": "/var/lib/docker/containers/41cb4070c6df4067dcde97dcfd30ba6c5dfb62bcd34682fb895cddde55202356/hosts",
+        "LogPath": "/var/lib/docker/containers/41cb4070c6df4067dcde97dcfd30ba6c5dfb62bcd34682fb895cddde55202356/41cb4070c6df4067dcde97dcfd30ba6c5dfb62bcd34682fb895cddde55202356-json.log",
+        "Name": "/edge-angie",
+        "RestartCount": 0,
+        "Driver": "overlayfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "/Volumes/BugsBunny/Development/devNginx/angie.conf:/etc/angie/angie.conf:ro",
+                "/Volumes/BugsBunny/Development/devNginx/ssl-params.conf:/etc/angie/ssl-params.conf:ro",
+                "/Volumes/BugsBunny/Development/devNginx/conf.d:/etc/angie/conf.d:ro",
+                "/Volumes/BugsBunny/Development/devNginx/certbot/certs/waldenpuddle:/etc/angie/certs/waldenpuddle:ro",
+                "/Volumes/BugsBunny/Development/devNginx/certbot/certs/dashingfellow:/etc/angie/certs/dashingfellow:ro",
+                "/Volumes/BugsBunny/Development/devNginx/logs:/var/log/angie:rw"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "devnginx_edge_net",
+            "PortBindings": {
+                "3031/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "3031"
+                    }
+                ],
+                "443/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "443"
+                    }
+                ],
+                "5157/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "5157"
+                    }
+                ],
+                "5160/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "5160"
+                    }
+                ],
+                "80/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "80"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "always",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": [],
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": [],
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "Storage": {
+            "RootFS": {
+                "Snapshot": {
+                    "Name": "overlayfs"
+                }
+            }
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/Volumes/BugsBunny/Development/devNginx/angie.conf",
+                "Destination": "/etc/angie/angie.conf",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/Volumes/BugsBunny/Development/devNginx/certbot/certs/dashingfellow",
+                "Destination": "/etc/angie/certs/dashingfellow",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/Volumes/BugsBunny/Development/devNginx/certbot/certs/waldenpuddle",
+                "Destination": "/etc/angie/certs/waldenpuddle",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/Volumes/BugsBunny/Development/devNginx/conf.d",
+                "Destination": "/etc/angie/conf.d",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/Volumes/BugsBunny/Development/devNginx/ssl-params.conf",
+                "Destination": "/etc/angie/ssl-params.conf",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/Volumes/BugsBunny/Development/devNginx/logs",
+                "Destination": "/var/log/angie",
+                "Mode": "rw",
+                "RW": true,
+                "Propagation": "rprivate"
+            }
+        ],
+        "Config": {
+            "Hostname": "41cb4070c6df",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "ExposedPorts": {
+                "3031/tcp": {},
+                "443/tcp": {},
+                "5157/tcp": {},
+                "5160/tcp": {},
+                "80/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Cmd": [
+                "angie",
+                "-g",
+                "daemon off;"
+            ],
+            "Image": "docker.angie.software/angie:latest",
+            "Volumes": null,
+            "WorkingDir": "/",
+            "Entrypoint": null,
+            "Labels": {
+                "com.docker.compose.config-hash": "14b41113ca63ca844a00ee355432f2ffc852f7d9916360119fd6da31fec68ba7",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.depends_on": "",
+                "com.docker.compose.image": "sha256:21b7291f4c873f7a20f5d985b43724163d22e1ddf0b4fcbc6d3def4ac340fa43",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "devnginx",
+                "com.docker.compose.project.config_files": "/Volumes/BugsBunny/Development/devNginx/docker-compose.yml",
+                "com.docker.compose.project.working_dir": "/Volumes/BugsBunny/Development/devNginx",
+                "com.docker.compose.service": "edge-angie",
+                "com.docker.compose.version": "5.3.0",
+                "org.opencontainers.image.authors": "Release Engineering Team \u003cdevops@tech.wbsrv.ru\u003e"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "247b59747758b64b5bcb644b3cff84e00cdb941ea0a52842a50eb69488e065da",
+            "SandboxKey": "/var/run/docker/netns/247b59747758",
+            "Ports": {
+                "3031/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "3031"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "3031"
+                    }
+                ],
+                "443/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "443"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "443"
+                    }
+                ],
+                "5157/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "5157"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "5157"
+                    }
+                ],
+                "5160/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "5160"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "5160"
+                    }
+                ],
+                "80/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "80"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "80"
+                    }
+                ]
+            },
+            "Networks": {
+                "devnginx_edge_net": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": [
+                        "edge-angie",
+                        "edge-angie"
+                    ],
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "a2854668e121b13f36c0dc598b5d1d0c0c1fda55f7dc91a79f3de8eed98db70c",
+                    "EndpointID": "55db24cbbf7555c9b4ba1cc67bcda46f2fde4dc57b7c7effb6b6d309f4110de4",
+                    "Gateway": "172.20.0.1",
+                    "IPAddress": "172.20.0.2",
+                    "MacAddress": "fa:29:cb:97:e0:1f",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "edge-angie",
+                        "41cb4070c6df"
+                    ]
+                }
+            }
+        },
+        "ImageManifestDescriptor": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:18e8b3a549e6c4294bc611043046089400201b42e4f41bf410d78659ad7642ad",
+            "size": 1239,
+            "platform": {
+                "architecture": "arm64",
+                "os": "linux"
+            }
+        }
+    }
+]

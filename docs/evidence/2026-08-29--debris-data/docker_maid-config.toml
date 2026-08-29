@@ -1,0 +1,78 @@
+# docker_maid policy — Walden workstation
+#
+# Scope note: /var/run/docker.sock symlinks to Docker Desktop, so docker_maid
+# targets the SAME daemon that runs the edge proxy. The [protect] block below
+# is therefore load-bearing, not decorative.
+#
+# Design: rules select ONLY resources carrying the docker_maid ownership stamp
+# (`dev.docker-maid.managed=true`, applied at creation by `docker_maid spawn`
+# or `docker_maid stamp`). Unstamped dev stacks — including every Postgres
+# volume holding real data — are invisible to these rules by construction.
+# Pre-existing debris is handled as a reviewed one-time pass, never as policy.
+
+[defaults]
+interval = "5m"          # backstop; Docker events also wake a pass
+
+# --- Protection: the edge proxy must never be a cleanup target -------------
+# This LAN edge terminates TLS for ~50 vhosts. Removing it is an outage.
+#
+# `openseo` is a persistent self-hosted service, not an agent sandbox, and its
+# `openseo_data` volume holds the only copy of its D1 SQLite database (there is
+# no backup). Compose file: ~/docker/openseo/compose.yaml. It carries no
+# `dev.docker-maid.managed` stamp, so the rules below would never select it —
+# this entry is insurance, same as the edge proxy.
+[protect]
+names = ["^edge-angie$", "^openseo$"]
+labels = [
+    "com.docker.compose.project=devnginx",
+    "com.docker.compose.project=openseo",
+]
+
+# --- Agent sandboxes -------------------------------------------------------
+# A running sandbox is NEVER touched, however long the agent takes. The clock
+# starts only once it stops, so a build -> critique -> judge loop is safe.
+# 12h then gives a human time to inspect a failed run before it is reclaimed.
+[[rules.containers]]
+id = "manual/agent-sandboxes"
+name = "agent-sandboxes"
+description = "Containers created via docker_maid spawn/stamp"
+scope = "owned"
+allow_unscoped = false
+stopped_ttl = "12h"
+
+[rules.containers.select]
+labels = ["dev.docker-maid.managed=true"]
+
+# Networks are cheap to recreate and leak fast; they exhaust the address pool.
+[[rules.networks]]
+id = "manual/agent-networks"
+name = "agent-networks"
+description = "Networks created via docker_maid spawn/stamp"
+scope = "owned"
+allow_unscoped = false
+orphan = true
+orphan_for = "6h"
+
+[rules.networks.select]
+labels = ["dev.docker-maid.managed=true"]
+
+# Only STAMPED volumes. Dev-data volumes carry no stamp and are never selected.
+[[rules.volumes]]
+id = "manual/agent-volumes"
+name = "agent-volumes"
+description = "Volumes created via docker_maid spawn/stamp"
+scope = "owned"
+allow_unscoped = false
+orphan_for = "72h"
+
+[rules.volumes.select]
+labels = ["dev.docker-maid.managed=true"]
+
+# >>> docker_maid managed rules; edit with `docker_maid tui` >>>
+# Stable IDs below are owned by the configurator. Manual rules above are untouched.
+[rules.build_cache]
+id = "docker-maid.configure/build-cache"
+older_than = "7d"
+max_bytes = 10737418240
+allow_unscoped = true
+# <<< docker_maid managed rules <<<

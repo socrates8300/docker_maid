@@ -1,0 +1,21 @@
+schema_version = 2
+
+[[entries]]
+kind = "container"
+value = "edge-angie"
+
+[[entries]]
+kind = "network"
+value = "devnginx_edge_net"
+
+[[entries]]
+kind = "label"
+value = "com.docker.compose.project=devnginx"
+
+[[entries]]
+kind = "label"
+value = "com.docker.compose.project=reset_path"
+
+[[entries]]
+kind = "label"
+value = "com.docker.compose.project=walden_starter"

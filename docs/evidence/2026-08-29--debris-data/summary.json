@@ -1,0 +1,303 @@
+{
+ "captured_at_utc": "2026-08-29T12:37:55+00:00",
+ "daemon": {
+  "engine": "docker-desktop 29.6.2 (moby, overlayfs)",
+  "cli_brew": "29.7.2",
+  "cli_desktop": "Docker.app 29.x",
+  "data_file": "/Volumes/BugsBunny/jamesr/DockerDesktop/DockerDesktop/Docker.raw",
+  "raw_allocated_gb": 494.384709632,
+  "vm_real_gb": 140,
+  "containerd_store_gb": 127,
+  "var_lib_docker_gb": 8.9
+ },
+ "counts": {
+  "images": 135,
+  "containers": 2,
+  "volumes": 103,
+  "networks": null,
+  "build_cache_entries": 456,
+  "dangling_images": 0
+ },
+ "image_families_by_virt_gb": {
+  "sddv4-predeploy-tests": {
+   "n": 40,
+   "virt_gb": 202.93,
+   "newest": "2026-08-28 22:14:35"
+  },
+  "<none>": {
+   "n": 18,
+   "virt_gb": 35.07,
+   "newest": "2026-08-27 05:24:18"
+  },
+  "sddv4-predeploy": {
+   "n": 42,
+   "virt_gb": 10.63,
+   "newest": "2026-08-28 22:12:19"
+  },
+  "rust": {
+   "n": 4,
+   "virt_gb": 6.79,
+   "newest": "2025-12-08 18:53:26"
+  },
+  "node": {
+   "n": 2,
+   "virt_gb": 6.54,
+   "newest": "2026-01-13 00:27:19"
+  },
+  "ghcr.io/every-app/open-seo": {
+   "n": 1,
+   "virt_gb": 3.75,
+   "newest": "2026-08-23 19:21:29"
+  },
+  "sddv4-xbuild": {
+   "n": 1,
+   "virt_gb": 3.2,
+   "newest": "2026-08-27 00:08:42"
+  },
+  "postgres": {
+   "n": 5,
+   "virt_gb": 2.56,
+   "newest": "2026-08-24 19:43:42"
+  },
+  "wordpress": {
+   "n": 1,
+   "virt_gb": 2.18,
+   "newest": "2026-07-20 13:13:50"
+  },
+  "crm-whatsapp-worker": {
+   "n": 1,
+   "virt_gb": 1.46,
+   "newest": "2026-08-05 19:59:24"
+  },
+  "mysql": {
+   "n": 1,
+   "virt_gb": 1.12,
+   "newest": "2026-07-27 17:08:33"
+  },
+  "arlisarangocom-web": {
+   "n": 1,
+   "virt_gb": 1.09,
+   "newest": "2026-07-30 21:12:20"
+  },
+  "arlis-hero-fix-test": {
+   "n": 1,
+   "virt_gb": 1.09,
+   "newest": "2026-07-30 20:46:35"
+  },
+  "arlisfresh-web": {
+   "n": 1,
+   "virt_gb": 1.09,
+   "newest": "2026-07-30 19:54:29"
+  },
+  "mailhog/mailhog": {
+   "n": 1,
+   "virt_gb": 0.57,
+   "newest": "2020-08-11 13:23:27"
+  },
+  "crm-app": {
+   "n": 1,
+   "virt_gb": 0.44,
+   "newest": "2026-08-05 19:41:30"
+  },
+  "next-greenfield-app": {
+   "n": 1,
+   "virt_gb": 0.44,
+   "newest": "2026-08-03 19:01:44"
+  },
+  "docker.angie.software/angie": {
+   "n": 1,
+   "virt_gb": 0.39,
+   "newest": "2026-07-17 08:35:27"
+  },
+  "reset-path-app": {
+   "n": 1,
+   "virt_gb": 0.35,
+   "newest": "2026-08-02 08:57:12"
+  },
+  "certbot/dns-cloudflare": {
+   "n": 1,
+   "virt_gb": 0.35,
+   "newest": "2026-07-16 00:12:08"
+  }
+ },
+ "volume_names": [
+  "06d2d07d85aa610746f16675b8276ae8eb3f67448f84c82646b0989a5f52c2a4",
+  "09dd45686f0a53e156f83ccfed659417d9a0c757b8e43ddc32432a44e887fb7d",
+  "0ac2c820e5a81ef6ce9f75ab9e44d5747175b38c7f30eeaafbb26dfea586f655",
+  "0d750b3b8df45d7b97d4a072229449f16d91a746213a8bd02675f249cc6f3183",
+  "12800b223e7b207917683163f5898655248756126f2c386d6eff3b401989d507",
+  "1303a8c05de67f14fcb7236b54d943fb9d491c0bce670e81a7106384b5c35b3a",
+  "1ce73a3122a044aa2196ed117b383c64a455930780edb0756f087eda47ee33a5",
+  "1d2d20ed2bbbd39a8bf09d21d92981e1aea5bd27f5b477bdd8e9571f7e6400f7",
+  "1d7c647f1dc0f2c5ce60b82d3f67e8966f6c3cd212e7fb19de6b719dcacf18fa",
+  "205819d0f97b6c1f8d8921d30b95e01a5d71194359ab03123afe66418abebe45",
+  "26a1f6ff2fa6a302827ae79e41c4607effb1cc67e56df17576b52a91aa5c5fbc",
+  "28658d93a256e9c167804aeb232c0b0bcadba6e4db744796db52ab816a7f9666",
+  "2a7ae1da35d4dad81eaf82eb67e2e2648a377f4be0081877703f370d118ce5a2",
+  "2ad8aba31bd44a4fa0fce3a0e0dd93b206b47821efe0c1319a971679280636db",
+  "2fcec8186deaf4ca72647ca3432bc7743ecf79fdf81898ee11edac03b7a337fe",
+  "35e06977a0e02145efd0515add66b3859b5a0633bd6af4dbcb24393bd7edb2d0",
+  "39ef1a18dede5d2a237ebb5cc6c7793182f7f97080f92e323908fcc2a5246e72",
+  "3d16e23e126c560674dc421c19eddc232a7d342f3e7bcf735af8152c3a6cf0d8",
+  "3d183e8bc17a0550f44f0ae51de682f58219082d245648352ee387c9ef5cdb73",
+  "4066b6d352e482de8eb9ed7c929e8ec1e24ca65012b384b19fc60ab588c25934",
+  "408f41cbbc6d90db9c588315b6053ffcbad1bf1e1ddfd94551d0f8c76c2fcf3e",
+  "4465911ee3da4ebd70350daa80faee469514fa564542e80a792a5ebc56a875fb",
+  "48c815094bbeea2c2ca0b6de76b1e118793b44b7456aadba71827b0eb3dbd280",
+  "4b4745f89995e24b6c81acf64bbe358661011884c3e7f7ac89e210b944546668",
+  "50d98bb3027ecda63a8b60aa32723916b381e721c5d6ab4b8d13e3a2f86595f1",
+  "51189a57a3b4e0f820a1207f3edfa9c429a6ac1d4fe58295c85183f889912a95",
+  "5ab4112e06248ef355a4b3f09fef3a279b51d0c4d7a337665e965977649314ff",
+  "5ccb38ec047a32407a3a66b4452a2cee947695530c25db9e9caf44a6ce331fca",
+  "64f16c05d301eebaf71b2886f2a3de40863860021ccfb3bbc01be062eeeba06a",
+  "68a82fba4aabb6525a4bb013fc645ca92b56a2734ddf25836fc5d5203df667b7",
+  "6a1f6209ef8ae8d2fa7d7f8f4a672fd7d290a767927fcb17053c2b7cfe7535b7",
+  "6a7bb8bfd4aaf0bac8b7499db9e5311556bdb4936e55ad3e07d4fbbeb3dcd16d",
+  "74efe2bc35819529b938b20872bfdf1f3a50939bc2cd0c75775fa9c2748da19e",
+  "75adad762eb1b35e4dfc83214f1a3e21372eb2433122f5f80d637a53f1514c30",
+  "7e5d50db38602abea88a5e687bcbd62a58bed5d034c2d07ee52d4dfa5340ee5b",
+  "7e7c4aa7ea0eef5262e9826d7cd012136381d608279b2495a9e8d04551b40bd1",
+  "883bdc6b532df8d07f1c25d519690050f1d185f1acb9363083135d4494e00ca0",
+  "95120536a07d13f5d6c25cc0d81355fedaec826acdc389d449bfb52816df2ef4",
+  "9bfdb65de263a8909c35cd794b925dd3ef688f82337d19e5258ccafed1ff66dd",
+  "9d4ab11b2ce2f7f6a8109e59a92b378e7585c49a32f03762721cc98cd9526dad",
+  "a2746b6599d97ac1dfd6707a851d44f991b0987c3c3db134e4dbdefb438ca48c",
+  "a2eef2be7dbb196452ad7274b4ae787a58316395a2778c7f14ebec33d860ddfc",
+  "a5e2976754d9db3661a5c70944befffbef8df60f7dd1476787ef7b13984492c3",
+  "a80a65751421fc504ac6d042941bda1d2bdf553846caef33b007207a85f6269e",
+  "a92e6974bbbe0219f16c9d62072f3c736c8a4e8edee19a06fcb3727f767f2ce0",
+  "aca3fc99f7b35190bfdedfbfe5a8ba4c4a88f485c3c01f9fcde30b7239eae954",
+  "aebaab5cb964b3fd1d9459c2a4b84bb59b4b11c55e18c599c6d680b13da8e68c",
+  "arlisarangocom_mysql-data",
+  "arlisarangocom_wordpress-data",
+  "b84c4030170541342b7ff968282f9dd4457af7b67e3af28de519c327c0e086b3",
+  "bb1ed986c7e7de0afde384afbd1dba12c5c94e60dd1b59558729f8fcb33541c3",
+  "bec7076d832989a0bdb632eea1d00952992d395c4d57541b181637d5c5f6327c",
+  "bedb254b9825bce96fefd2afa298bee7e47df198ef12bcd6d34381400fb1cc0c",
+  "c37a044fe92764e8b5cd217b0804d138f6d18c2b492072bb3dd2a1a5b507df8e",
+  "c70de2d5d6c6b1703d704b8ee669adb6ba3e8a89e4198f4400146064067d41af",
+  "cab9f9601c3d7ae3643a5d9e754c44f1f1c660f0cae0aded4d5d231c744a43d3",
+  "ccd76dcf04574a64aec29d2697c068555e9a8ffd5977cf22b087b36f91776449",
+  "cf6eea9ee79575ad844d5799d93aa1379744df34dfdff0fa21eae8638ab02d52",
+  "cf8e10263bdef5d670c147eccfa2847ba2a7fb5380dce37b5d01645844da3162",
+  "crm_app_data",
+  "crm_postgres_data",
+  "crm_whatsapp_outbox",
+  "crm_whatsapp_session",
+  "d219d6e1d9428a1a424432e6f263641c9715ea1f4cf4097c2bd6ee0b52caac05",
+  "d2a7276e73aa06dda9d70e248a2694041b229de2ad3fcb0d43f1249c5ed958c8",
+  "d2ff3b64bf56b3a46e8690507c1fc0a386514e06116670b0a26789b507e7f215",
+  "d30274afd6dd2847d8240634fe141279339ab0217603f8975b3205332172a8a2",
+  "d38f087de8efd26766c3d8c7aaa680d74abb926221cd010c1c98df1195ad0bce",
+  "d5f5c3df674275d4a83bbed5875a88a04a93642b951eafbc3ed9151db09b724b",
+  "d7cbb44f3784f0feec043b04d60a9a1ed5dd4f9ed6dccd012533401a6301af9d",
+  "d81515eabf27a79d2b5e92c64d134f93276c85d293f392534f5a47c81c655275",
+  "dac648f101e0350140a232295572df304c1a9b4c1f952c934c69dc4f924bb8ab",
+  "dbb00eaf1a8fb273610f5b755d97f548d7ab0fd46436bd8a71173a33c9d70256",
+  "de7b7f2415ead9aaced9752c3fd8c51ef91447aa0625b497b7cc5572842bda17",
+  "descuentixco_starter-postgres-data",
+  "dff6d9043f13fd8113af9df87714aea8ee2722f8864dc3ee3ddba872577d5453",
+  "e106698b0dada8e6e2924cc503c5e80bb184d6b7faa0be022c5ddcd9e9b8c315",
+  "e5c4451f03ac43d4eb9b54a04db791c2746c38316b267ee2d6693403c05ae490",
+  "eb7ae029f0c26d13dcd26dc518646728c2ea227df074cfad58561c2b3765a8b3",
+  "ee5f5211044bda7c68b8e4f38b743c887bcf29fecc1eef93dea72baf399b558d",
+  "email_cert_01_walden_starter-postgres-data",
+  "email_cert_02_walden_starter-postgres-data",
+  "email_cert_03_walden_starter-postgres-data",
+  "f1389c6dd8ab816a0819863c42ef6f767fee10beb2b44ed6696cdb827fb02450",
+  "f20fdcb4ccee7ae8a9744542695de6acbfcaf8c9971bad8ee1dbc99e4200cd45",
+  "f364f9c7769fd9652740fee9e5d95e88fa9b87e428610f0d54dbb7be8e2055d4",
+  "founder-billing-ui_starter-postgres-data",
+  "fresh-app-v2_starter-postgres-data",
+  "fresh-final-5d579d6_starter-postgres-data",
+  "generated-app_starter-postgres-data",
+  "marketingops_starter-postgres-data",
+  "openseo_data",
+  "papasito-dev_postgres_data",
+  "papasito-dev_redis_data",
+  "repo_starter-postgres-data",
+  "reset_path-marketingops-proof_starter-postgres-data",
+  "reset_path_starter-postgres-data",
+  "walden-marketingops-clone5cwntv_starter-postgres-data",
+  "walden-starter-app-proof_starter-postgres-data",
+  "walden_management_walden_miniodata",
+  "walden_management_walden_pgdata",
+  "walden_management_walden_redisdata",
+  "walden_starter_starter-postgres-data"
+ ],
+ "volume_sizes_gb": {
+  "d81515eabf27a79d2b5e92c64d134f93276c85d293f392534f5a47c81c655275": 0.0,
+  "email_cert_02_walden_starter-postgres-data": 0.0,
+  "28658d93a256e9c167804aeb232c0b0bcadba6e4db744796db52ab816a7f9666": 0.0,
+  "7e5d50db38602abea88a5e687bcbd62a58bed5d034c2d07ee52d4dfa5340ee5b": 0.0,
+  "95120536a07d13f5d6c25cc0d81355fedaec826acdc389d449bfb52816df2ef4": 0.0,
+  "a2746b6599d97ac1dfd6707a851d44f991b0987c3c3db134e4dbdefb438ca48c": 0.0,
+  "aca3fc99f7b35190bfdedfbfe5a8ba4c4a88f485c3c01f9fcde30b7239eae954": 0.0,
+  "bec7076d832989a0bdb632eea1d00952992d395c4d57541b181637d5c5f6327c": 0.0,
+  "ee5f5211044bda7c68b8e4f38b743c887bcf29fecc1eef93dea72baf399b558d": 0.0,
+  "f1389c6dd8ab816a0819863c42ef6f767fee10beb2b44ed6696cdb827fb02450": 0.0,
+  "68a82fba4aabb6525a4bb013fc645ca92b56a2734ddf25836fc5d5203df667b7": 0.0,
+  "crm_app_data": 0.0,
+  "d7cbb44f3784f0feec043b04d60a9a1ed5dd4f9ed6dccd012533401a6301af9d": 0.0,
+  "f20fdcb4ccee7ae8a9744542695de6acbfcaf8c9971bad8ee1dbc99e4200cd45": 0.0,
+  "bb1ed986c7e7de0afde384afbd1dba12c5c94e60dd1b59558729f8fcb33541c3": 0.0
+ },
+ "build_cache": {
+  "entries": 456,
+  "total_gb": 60.1,
+  "by_age_days": {
+   "0-1d": {
+    "n": 93,
+    "gb": 24.1
+   },
+   "1-3d": {
+    "n": 187,
+    "gb": 17.6
+   },
+   "3-7d": {
+    "n": 0,
+    "gb": 0
+   },
+   "7-30d": {
+    "n": 109,
+    "gb": 3.3
+   },
+   ">30d": {
+    "n": 67,
+    "gb": 15.0
+   }
+  },
+  "types": {
+   "regular": 439,
+   "source.local": 16,
+   "frontend": 1
+  }
+ },
+ "maid_state": {
+  "last_pass": "2026-08-18 (activity.jsonl)",
+  "observation_clocks": "247 tracked, oldest 12.6d",
+  "protected": [
+   "edge-angie",
+   "openseo",
+   "devnginx",
+   "openseo-compose"
+  ]
+ },
+ "volumes": {
+  "count": 103,
+  "dangling_count": 102,
+  "total_gb": 6.06,
+  "top_by_size_gb": {
+   "crm_whatsapp_session": 0.537,
+   "marketingops_starter-postgres-data": 0.393,
+   "walden_starter_starter-postgres-data": 0.279,
+   "arlisarangocom_mysql-data": 0.218,
+   "descuentixco_starter-postgres-data": 0.111,
+   "arlisarangocom_wordpress-data": 0.09,
+   "generated-app_starter-postgres-data": 0.077,
+   "walden-starter-app-proof_starter-postgres-data": 0.077,
+   "ee5f5211044bda7c68b8e4f38b743c887bcf29fecc1eef93dea72baf399b558d": 0.075,
+   "walden_management_walden_pgdata": 0.074
+  }
+ }
+}

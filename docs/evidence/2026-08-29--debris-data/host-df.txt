@@ -1,0 +1,3 @@
+Filesystem   1024-blocks       Used  Available Capacity iused      ifree %iused  Mounted on
+/dev/disk11   3905706624 2298803720 1606902904    59% 2221514 4292745765    0%   /Volumes/BugsBunny
+/dev/disk3s5   482797652  370107244   74991648    84% 6380153  749916480    1%   /System/Volumes/Data

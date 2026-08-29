@@ -1,0 +1,6 @@
+warning: rule "agent-sandboxes" previously matched resources but now matches none
+Inventory: total=709, protected=11, owned=0, authorized-unscoped=456, unowned=242, pending=151
+Runtime protection entries: 5
+Last completed cleanup pass: 000000000000000018ccdcb384fa9660-0001761a-0000000000000000 (1787045815 to 1787045815, source=clean, config=83c2c4c45c09295a)
+  removed container sharp_hamilton rule=agent-sandboxes freed_bytes=0
+Last result: removed=1, skipped=0, failed=0, reclaimed_bytes=0

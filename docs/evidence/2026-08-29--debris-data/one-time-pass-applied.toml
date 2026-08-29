@@ -1,0 +1,55 @@
+# docker_maid one-time reviewed pass — 2026-08-29
+# Not the standing policy. Sweeps captured debris so OrbStack migration
+# starts small. Every unscoped rule below is narrowed by an explicit selector.
+[defaults]
+interval = "5m"
+
+# Belt and braces: the two live services keep their names shielded even in
+# this one-off file. Protection wins before selection.
+[protect]
+names = ["^openseo$", "^edge-angie$"]
+
+# All unreferenced images not protected: registry long-tail, per-commit
+# pipeline images, dangling <none>, local app builds. In-use images
+# (openseo, edge-angie) are referenced and never selected.
+[[rules.images]]
+id = "manual/one-time-image-sweep"
+name = "one-time-image-sweep"
+description = "Reviewed one-time sweep: every unreferenced image"
+scope = "all"
+allow_unscoped = true
+unused_for = "1h"
+image_tag_patterns = ["*"]
+dangling = true
+
+[rules.images.select]
+names = [".+"]
+
+# Dangling volumes only. Patterns: anonymous 64-hex (agent/compose leftovers),
+# LaunchKit starter databases, walden management trio, papasito dev stack,
+# named one-offs. Protected volumes (openseo_data, devnginx) never match
+# because protection wins before selection.
+[[rules.volumes]]
+id = "manual/one-time-volume-sweep"
+name = "one-time-volume-sweep"
+description = "Reviewed one-time sweep: dangling volumes by captured patterns"
+scope = "all"
+allow_unscoped = true
+orphan_for = "1h"
+
+[rules.volumes.select]
+names = [
+    "^[0-9a-f]{64}$",
+    "_starter-postgres-data$",
+    "_(pgdata|redisdata|miniodata)$",
+    "^papasito-dev_",
+    "^crm_",
+    "^arlisarangocom_",
+]
+
+# Build cache: cold sweep to ~1 GiB, oldest first.
+[rules.build_cache]
+id = "manual/one-time-build-cache"
+older_than = "1h"
+max_bytes = 1073741824
+allow_unscoped = true
