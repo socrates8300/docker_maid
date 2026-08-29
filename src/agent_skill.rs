@@ -42,6 +42,10 @@ pub const SKILLS: &[Skill] = &[
         name: "docker-maid-config",
         document: include_str!("../assets/agent-skill-config/SKILL.md"),
     },
+    Skill {
+        name: "docker-maid-repo",
+        document: include_str!("../assets/agent-skill-repo/SKILL.md"),
+    },
 ];
 
 /// The file every supported harness reads.
@@ -368,6 +372,11 @@ mod tests {
         skill_by_name("docker-maid-config").expect("the config skill is installed by this build")
     }
 
+    /// The skill that sets per-repo defaults.
+    fn repo_skill() -> &'static Skill {
+        skill_by_name("docker-maid-repo").expect("the repo skill is installed by this build")
+    }
+
     /// Every fenced block in `document` opened with the given language tag.
     fn fenced_blocks(document: &str, tag: &str) -> Vec<String> {
         let mut blocks = Vec::new();
@@ -479,13 +488,15 @@ mod tests {
         // any unknown key, so one stale example would teach an agent to write a
         // file the tool rejects — the exact failure this document exists to
         // prevent. Ask the real deserializer, not a reviewer's eye.
-        let examples = fenced_blocks(config_skill().document, "toml");
+        let mut fences = fenced_blocks(config_skill().document, "toml");
+        fences.extend(fenced_blocks(repo_skill().document, "toml"));
+        let examples = fences;
         assert!(
-            examples.len() >= 3,
-            "the config skill should show more than one policy shape"
+            examples.len() >= 4,
+            "the configuration and repo skills should show more than one policy shape each"
         );
         for (index, example) in examples.iter().enumerate() {
-            let path = PathBuf::from(format!("{}#toml[{index}]", config_skill().name));
+            let path = PathBuf::from(format!("#toml[{index}]"));
             let config = Config::parse(example, &path)
                 .unwrap_or_else(|error| panic!("example {index} does not parse: {error}"));
             config
