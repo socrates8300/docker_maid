@@ -42,10 +42,12 @@ pub fn status_document(
     plan: &Plan,
     runtime_protection_count: usize,
     last: Option<&CompletedPass>,
+    daemon: &crate::inventory::DaemonIdentity,
 ) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
         "command": "status",
+        "daemon": daemon,
         "configuration": config_summary(config_path, config_hash, config),
         "inventory": inventory_summary(plan),
         "items": plan_items(plan),
@@ -508,5 +510,30 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["error"]["kind"], "configuration");
         assert_eq!(value["error"]["message"], "bad input");
+    }
+
+    #[test]
+    fn status_document_carries_daemon_identity() {
+        let identity = crate::inventory::DaemonIdentity {
+            name: Some("orbstack".to_owned()),
+            operating_system: Some("OrbStack OS 2.2.3".to_owned()),
+            server_version: Some("29.4.0".to_owned()),
+            kernel_version: Some("6.14.0".to_owned()),
+        };
+        let value = status_document(
+            "/config",
+            "hash",
+            &Config::default(),
+            &Plan {
+                decisions: Vec::new(),
+            },
+            0,
+            None,
+            &identity,
+        );
+        assert_eq!(value["schema_version"], 1, "additive change keeps v1");
+        assert_eq!(value["daemon"]["name"], "orbstack");
+        assert_eq!(value["daemon"]["server_version"], "29.4.0");
+        assert_eq!(value["daemon"]["operating_system"], "OrbStack OS 2.2.3");
     }
 }

@@ -129,6 +129,12 @@ removals. Exit `2` means an applied pass contains a skipped or failed outcome.
 {
   "schema_version": 1,
   "command": "status",
+  "daemon": {
+    "name": "orbstack",
+    "operating_system": "OrbStack OS 2.2.3",
+    "server_version": "29.4.0",
+    "kernel_version": "6.14.0"
+  },
   "configuration": {
     "path": "/absolute/path/docker_maid.toml",
     "hash": "stable-config-hash",
@@ -146,6 +152,14 @@ removals. Exit `2` means an applied pass contains a skipped or failed outcome.
 ```
 
 A rule is `regressed` only when its previous completed pass match count was non-zero and its current match count is zero.
+
+The `daemon` block is present on every `status` document (additive since
+v1). Fields come from the engine's `GET /info` and identify which daemon
+docker_maid resolves to through `DOCKER_HOST` and the default socket —
+docker_maid uses bollard and ignores docker CLI contexts, so the CLI and the
+tool can point at different engines. OrbStack reports `name=orbstack`;
+Docker Desktop reports `name=docker-desktop`; colima reports the context
+node name. `null` means the engine omitted the field.
 
 ## Protection and configuration documents
 

@@ -23,7 +23,7 @@ docker_maid clean --apply
 ## Install
 
 You need [Rust 1.91+](https://rustup.rs/) and a running Docker Engine
-(Linux, or macOS via Colima / Docker Desktop).
+(Linux, or macOS via OrbStack / Colima / Docker Desktop).
 
 ```sh
 git clone https://github.com/socrates8300/docker_maid.git
@@ -34,6 +34,28 @@ cargo install --path .
 
 The binary talks to the Docker API over the socket. There is no Python
 runtime, no sidecar container, and no extra daemon besides Docker itself.
+
+### OrbStack (macOS)
+
+OrbStack is a drop-in Docker Desktop replacement and needs no special
+support: docker_maid speaks the standard Engine API and follows the socket.
+Setup notes recorded when this operator migrated (evidence in
+docs/evidence/2026-08-29--docker-debris-capture.md):
+
+- `orbctl docker migrate` copies containers, volumes, and image records —
+  not compose-created networks. Recreate those networks with their
+  compose-project labels before starting migrated containers.
+- The system socket is not handed over automatically while Docker Desktop's
+  privileged helper lives. After removing Docker Desktop:
+  `sudo ln -sfn $HOME/.orbstack/run/docker.sock /var/run/docker.sock`.
+- Put `~/.orbstack/bin` before other docker installations in `PATH`; IDEs
+  hardcode `/usr/local/bin/docker`, so symlink it to
+  `~/.orbstack/bin/docker`.
+- `docker_maid status` prints the daemon identity (`Daemon:` line) and the
+  machine document's `daemon` block reports it. docker_maid uses bollard and
+  ignores docker CLI contexts, so if the CLI and docker_maid disagree about
+  which engine is live, the status line names the one docker_maid is
+  actually talking to.
 
 On macOS with Colima, point the client at Colima's socket if `DOCKER_HOST`
 is unset:
