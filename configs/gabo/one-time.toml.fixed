@@ -1,0 +1,54 @@
+# Gabo one-time reviewed pass — captures containers, then volumes/images.
+[defaults]
+interval = "5m"
+
+[protect]
+__P__=1
+# spanishnumbers-web is a persistent app (manual docker run, -p 80:80).
+names = ["^numeros-vivos$", "^spanishnumbers-web$"]
+# walden_management dev stack: data stays (active dev in ~/dev/walden).
+names = ["^walden_minio$", "^walden_postgres$", "^walden_redis$",
+         "^walden_management_.*$"]
+# The one big volume that is not junk (James 2026-08-29).
+names = ["^imbue_control_plane_.*$"]
+
+# Remove every stopped container except the protected ones.
+[[rules.containers]]
+id = "manual/gabo-leftover-containers"
+name = "gabo-leftover-containers"
+description = "Stopped test containers from earlier dev rounds"
+scope = "all"
+allow_unscoped = true
+stopped_ttl = "1h"
+
+[rules.containers.select]
+names = [".+"]
+
+# Everything unreferenced, after the stopped containers go.
+[[rules.images]]
+id = "manual/gabo-images"
+name = "gabo-images"
+scope = "all"
+allow_unscoped = true
+unused_for = "1h"
+image_tag_patterns = ["*"]
+dangling = true
+
+[rules.images.select]
+names = [".+"]
+
+[[rules.volumes]]
+id = "manual/gabo-volumes"
+name = "gabo-volumes"
+scope = "all"
+allow_unscoped = true
+orphan_for = "12h"
+
+[rules.volumes.select]
+names = [".+"]
+
+[rules.build_cache]
+id = "manual/gabo-build-cache"
+older_than = "1h"
+max_bytes = 1073741824
+allow_unscoped = true

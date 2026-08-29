@@ -1,0 +1,48 @@
+# Gabo standing policy — walder-centric, not a copy of Boltero's.
+[defaults]
+interval = "5m"
+
+# Persistent app + real dev data. Everything else is reclaimable.
+[protect]
+__P__=1
+names = [
+  "^numeros-vivos$", "^spanishnumbers-web$",
+  "^walden_minio$", "^walden_postgres$", "^walden_redis$",
+  "^walden_management_.*$",
+  "^imbue_control_plane_.*$",
+]
+
+[[rules.containers]]
+id = "manual/leftover-containers"
+name = "leftover-containers"
+scope = "all"
+allow_unscoped = true
+stopped_ttl = "12h"
+[rules.containers.select]
+names = [".+"]
+
+[[rules.images]]
+id = "manual/images-12h"
+name = "images-12h"
+scope = "all"
+allow_unscoped = true
+unused_for = "12h"
+image_tag_patterns = ["*"]
+dangling = true
+[rules.images.select]
+names = [".+"]
+
+[[rules.volumes]]
+id = "manual/volumes-12h"
+name = "volumes-12h"
+scope = "all"
+allow_unscoped = true
+orphan_for = "12h"
+[rules.volumes.select]
+names = [".+"]
+
+[rules.build_cache]
+id = "manual/build-cache"
+older_than = "24h"
+max_bytes = 10737418240
+allow_unscoped = true

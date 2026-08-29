@@ -1,0 +1,16 @@
+{
+ "engine": "Docker Desktop 29.7.2 linux/arm64",
+ "images": 46,
+ "image_gb_total": 30.15,
+ "image_reclaimable_gb": 27.01,
+ "containers": 13,
+ "running": 1,
+ "stopped": 12,
+ "volumes": 1886,
+ "volume_gb": 88.67,
+ "volume_reclaimable_gb": 87.83,
+ "dangling_volumes": 1876,
+ "named_volumes": 59,
+ "hex_volumes": 912,
+ "build_cache_gb": 3.5
+}

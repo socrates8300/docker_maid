@@ -1,0 +1,1147 @@
+ID:           rrra85majibs4ub4czmqkai7w
+Parents:
+ - orn3bany47nbdsd51uzoxllsg
+Created at:   2026-08-15 12:14:49.757262887 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         405B
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           49vdx7a09qyi0sqsbdj8loeir
+Parents:
+ - 5izeq2l34e6m7e1rllc0idjuj
+Created at:   2026-08-14 17:53:43.116203554 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         447B
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           m45nontpurg6isi1ic3h4vd5b
+Parents:
+ - dhbshd7zqfsoxatlvirlwbh0k
+Created at:   2026-08-15 12:14:49.708666346 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         626B
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           orn3bany47nbdsd51uzoxllsg
+Parents:
+ - m45nontpurg6isi1ic3h4vd5b
+Created at:   2026-08-15 12:14:49.734481637 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         956B
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           8mvg5mfm6cqwq6qr1olokvrpm
+Parents:
+ - rrra85majibs4ub4czmqkai7w
+Created at:   2026-08-15 12:14:49.776237846 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         1.21kB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           rghwz0fpfoz3ytewnfazfb1la
+Parents:
+ - 8mvg5mfm6cqwq6qr1olokvrpm
+Created at:   2026-08-15 12:14:49.786506804 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         1.399kB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           oeb4kfbvui31wpsi9nequ7nu2
+Parents:
+ - lh9a8n5vyxcs50bttrjlofs5v
+Created at:   2026-08-14 17:53:43.018178429 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         3.31kB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           eww0vaojmyurl606mlgc18hzw
+Parents:
+ - 21qzwmhxjzl5zcmef0pav3ccy
+Created at:   2026-08-14 17:54:57.680294172 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.096kB
+Description:  [deps 15/18] WORKDIR /workspace/papasito-next
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           hu7yzhgqdaujxrgcwhrzotow6
+Parents:
+ - j5ssks8tdroytxvk5n14nqpgg
+Created at:   2026-08-14 17:54:56.064663421 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.096kB
+Description:  [deps 13/18] WORKDIR /workspace/services/api
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           vo0f32srey20t5dhgvr3hlf4p
+Parents:
+ - 2iwhtdxrjqzrh1wk3njpd8ysd
+Created at:   2026-08-14 17:54:07.345869426 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.096kB
+Description:  [deps 15/18] WORKDIR /workspace/papasito-next
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           x0iaf5xrn80n9blzhjyvx7aoz
+Parents:
+ - spxstsmnjfv7ijc51crn5geni
+Created at:   2026-08-14 17:54:05.636190884 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.096kB
+Description:  [deps 13/18] WORKDIR /workspace/services/api
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           s94xx8dzl2co7p28o8vwf7fc5
+Parents:
+ - qnmogdq6t624o87028fswhgfi
+Created at:   2026-08-21 20:17:59.890000134 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.128kB
+Description:  [runner 1/8] WORKDIR /app
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           zjghragu2svwd3hubn3tvc97h
+Parents:
+ - yozawhko5oihcq18xcsfj5a7s
+Created at:   2026-08-21 20:24:31.399793801 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.128kB
+Description:  [runner 8/8] WORKDIR /app/apps/web
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           2gte88zv5ue7i7zd7behvyfn1
+Parents:
+ - 49vdx7a09qyi0sqsbdj8loeir
+Created at:   2026-08-14 17:53:43.211857554 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         8.192kB
+Description:  [deps  2/18] WORKDIR /workspace
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           3v03e3ayz5pf160ikvg6t9qki
+Created at:   2026-08-15 12:14:49.597627179 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         8.192kB
+Description:  local source for context
+Usage count:  1
+Last used:    2 weeks ago
+Type:         source.local
+
+ID:           dscquq776rf83lgbfkva4ssmh
+Created at:   2026-08-21 20:17:54.017148797 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         8.192kB
+Description:  local source for dockerfile
+Usage count:  1
+Last used:    7 days ago
+Type:         source.local
+
+ID:           j5pwfcf71mqmi8efms4m4pjuy
+Parents:
+ - 30h6r4t6jpz3aqqz0b58e0lhb
+Created at:   2026-08-15 12:14:51.318049763 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         8.192kB
+Description:  [build 2/7] WORKDIR /app
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           ne3po9x1dokl4a1gatkkw6o1a
+Created at:   2026-08-15 12:14:47.264631886 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         8.192kB
+Description:  local source for dockerfile
+Usage count:  1
+Last used:    2 weeks ago
+Type:         source.local
+
+ID:           oqt2hv95jw8zjgsot8susjdu8
+Created at:   2026-08-21 20:17:55.94322684 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         8.192kB
+Description:  local source for context
+Usage count:  1
+Last used:    7 days ago
+Type:         source.local
+
+ID:           uatjgd6wql3zw5p9x13kd7iij
+Created at:   2026-08-14 17:53:42.943685845 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         8.192kB
+Description:  local source for context
+Usage count:  2
+Last used:    2 weeks ago
+Type:         source.local
+
+ID:           h60iwx7koo2headl0he2k8ucu
+Parents:
+ - jaxus11qwe7keup5jl0dd1y3r
+Created at:   2026-08-21 20:17:59.092704217 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         8.285kB
+Description:  [base 2/3] WORKDIR /app
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           nqdgvoxsnktx9zp5f5lvy16tg
+Created at:   2026-08-14 17:53:42.829515429 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         12.29kB
+Description:  local source for dockerfile
+Usage count:  2
+Last used:    2 weeks ago
+Type:         source.local
+
+ID:           3rn4ytpzp6lsiyhemixs4wpu6
+Parents:
+ - 48x34zjzsy2hcmck9e5vqluem
+Created at:   2026-08-15 12:14:52.729983833 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         16.38kB
+Description:  [build 5/7] COPY tsconfig.json build.mjs ./
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           515dqm7fbnv6ik8eyxpsy2dsm
+Parents:
+ - wm7vhu7thszvj3k2e6hgl892u
+Created at:   2026-08-21 20:18:00.308039925 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         20.48kB
+Description:  [deps 12/16] COPY launch_kit/package.json launch_kit/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           s5pskme1t8cypzc4uatfz8xya
+Parents:
+ - stig7h56h2vlbf4zzhx0wi42w
+Created at:   2026-08-21 20:17:59.972750092 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         20.48kB
+Description:  [deps  3/16] COPY packages/app-core/package.json packages/app-core/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           stig7h56h2vlbf4zzhx0wi42w
+Parents:
+ - nr3bv27g2hd1t7et9aq0kpkp0
+Created at:   2026-08-21 20:17:59.935237425 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         20.48kB
+Description:  [deps  2/16] COPY apps/web/package.json apps/web/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           wm7vhu7thszvj3k2e6hgl892u
+Parents:
+ - ouaceetgufxus1g09cc1bor4n
+Created at:   2026-08-21 20:18:00.263362342 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         20.48kB
+Description:  [deps 11/16] COPY services/api/package.json services/api/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           30h6r4t6jpz3aqqz0b58e0lhb
+Parents:
+ - l8699h6055ood3lv1bp7prn0c
+Created at:   2026-08-15 12:14:49.745168096 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         20.92kB
+Description:  pulled from docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           jaxus11qwe7keup5jl0dd1y3r
+Parents:
+ - mpg8sqlx0xw9ev84vt0anvvam
+Created at:   2026-08-21 20:17:56.070987132 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         20.93kB
+Description:  pulled from docker.io/library/node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           e6wjzwixrk130zdqv6celjy5k
+Parents:
+ - n599iaxy02x083xw3zggtz47r
+Created at:   2026-08-21 20:18:00.1114793 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps  7/16] COPY packages/feature-files/package.json packages/feature-files/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           leenatb4rg83gn405uffbti9c
+Parents:
+ - o4neuanfbrdf1rgj628iv4pkj
+Created at:   2026-08-21 20:18:00.044030217 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps  5/16] COPY packages/feature-auth/package.json packages/feature-auth/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           n599iaxy02x083xw3zggtz47r
+Parents:
+ - leenatb4rg83gn405uffbti9c
+Created at:   2026-08-21 20:18:00.079863384 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps  6/16] COPY packages/feature-profile/package.json packages/feature-profile/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           o4neuanfbrdf1rgj628iv4pkj
+Parents:
+ - s5pskme1t8cypzc4uatfz8xya
+Created at:   2026-08-21 20:18:00.01084355 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps  4/16] COPY packages/design-tokens/package.json packages/design-tokens/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           ouaceetgufxus1g09cc1bor4n
+Parents:
+ - snls1rl2du97vy9sgepo25y1v
+Created at:   2026-08-21 20:18:00.231059425 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps 10/16] COPY packages/ui-web/package.json packages/ui-web/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           snls1rl2du97vy9sgepo25y1v
+Parents:
+ - xvts2lbcr1xrezirqcgxj0pt7
+Created at:   2026-08-21 20:18:00.18054355 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps  9/16] COPY packages/qr-engine/package.json packages/qr-engine/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           xvts2lbcr1xrezirqcgxj0pt7
+Parents:
+ - e6wjzwixrk130zdqv6celjy5k
+Created at:   2026-08-21 20:18:00.146603425 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         24.58kB
+Description:  [deps  8/16] COPY packages/feature-billing/package.json packages/feature-billing/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           nr3bv27g2hd1t7et9aq0kpkp0
+Parents:
+ - qnmogdq6t624o87028fswhgfi
+Created at:   2026-08-21 20:17:59.899630509 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         28.67kB
+Description:  [deps  1/16] COPY package.json pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           bwqip9lvrzzvharyzli9car02
+Parents:
+ - j5pwfcf71mqmi8efms4m4pjuy
+Created at:   2026-08-15 12:14:51.36739643 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         32.77kB
+Description:  [build 3/7] COPY package.json package-lock.json ./
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           fslxlg9v65bfqxmnexfn95egk
+Parents:
+ - jaly4qt4uz8woaewe57afqvtt
+Created at:   2026-08-21 20:18:00.412769842 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         32.77kB
+Description:  [deps 15/16] COPY launch_kit/packages/launch-kit-reporting-ui/package.json launch_kit/packages/launch-kit-reporting-ui/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           jaly4qt4uz8woaewe57afqvtt
+Parents:
+ - xi04ym919rkjmhtxpk6jgr6nn
+Created at:   2026-08-21 20:18:00.382686176 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         32.77kB
+Description:  [deps 14/16] COPY launch_kit/packages/http-runtime/package.json launch_kit/packages/http-runtime/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           xi04ym919rkjmhtxpk6jgr6nn
+Parents:
+ - 515dqm7fbnv6ik8eyxpsy2dsm
+Created at:   2026-08-21 20:18:00.348465509 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         32.77kB
+Description:  [deps 13/16] COPY launch_kit/packages/contracts/package.json launch_kit/packages/contracts/package.json
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           q8gzao90ex4nfs0ywlwtqp6wh
+Parents:
+ - zk83iqav41ed3ss3ho3ca8x08
+Created at:   2026-08-15 12:14:49.927250929 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         33.1kB
+Description:  mount / from exec /bin/sh -c printf 'server {\n    listen 80;\n    server_name _;\n    root /usr/share/nginx/html;\n    index index.html;\n    access_log off;\n    error_log  /dev/stderr warn;\n\n    location / {\n        try_files $uri /index.html;\n        add_header Cache-Control "no-cache" always;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           l4w3rrvxk7ystrv9g9i25wcsv
+Parents:
+ - tpjo00q6cscvhykxbot5mqsy9
+Created at:   2026-08-21 20:17:56.005869798 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         72.94kB
+Description:  pulled from docker.io/library/node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           w8tl6105hpe2he8qynjb9unx6
+Parents:
+ - 7j5zflpk5bgtqldlbzx0wfmlj
+Created at:   2026-08-14 17:53:47.598779375 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         221.2kB
+Description:  [deps  6/18] COPY services/api ./services/api
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           yh8j0ft09dgbjcgziwqwtthx6
+Parents:
+ - 7j5zflpk5bgtqldlbzx0wfmlj
+Created at:   2026-08-14 17:54:39.929141886 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         221.2kB
+Description:  [deps  6/18] COPY services/api ./services/api
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           j5ssks8tdroytxvk5n14nqpgg
+Parents:
+ - xixokijnwyru4fowv71s8bdkg
+Created at:   2026-08-14 17:54:56.036349796 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         245.8kB
+Description:  [deps 12/18] COPY papasito-next/prisma ./papasito-next/prisma/
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           spxstsmnjfv7ijc51crn5geni
+Parents:
+ - h0q403lbrzboqmhw7k6t600gh
+Created at:   2026-08-14 17:54:05.607366675 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         245.8kB
+Description:  [deps 12/18] COPY papasito-next/prisma ./papasito-next/prisma/
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           qnmogdq6t624o87028fswhgfi
+Parents:
+ - h60iwx7koo2headl0he2k8ucu
+Created at:   2026-08-21 20:17:59.846933509 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         249.5kB
+Description:  mount / from exec /bin/sh -c corepack enable
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           mpu4ne9re82gloq35xwtdoetr
+Parents:
+ - ydqjrurk46fkjvfe9kveg41bv
+Created at:   2026-08-21 20:24:31.199193801 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         367.2kB
+Description:  [runner 5/8] COPY --from=build /app/packages packages
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           7yzv35h6uktajpofsdv9xuhz6
+Parents:
+ - 3rn4ytpzp6lsiyhemixs4wpu6
+Created at:   2026-08-15 12:14:52.758843291 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         499.7kB
+Description:  [build 6/7] COPY src ./src
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           h0q403lbrzboqmhw7k6t600gh
+Parents:
+ - ohk4k72kgofs9i1kv2i9dwrwr
+Created at:   2026-08-14 17:54:05.571955342 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         516.1kB
+Description:  [deps 11/18] COPY papasito-next/package.json papasito-next/package-lock.json ./papasito-next/
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           xixokijnwyru4fowv71s8bdkg
+Parents:
+ - rj66gocm3plse2kzvhxownk3g
+Created at:   2026-08-14 17:54:56.000898712 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         516.1kB
+Description:  [deps 11/18] COPY papasito-next/package.json papasito-next/package-lock.json ./papasito-next/
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           vn369eejrzdqgvcr9jwhoc37h
+Created at:   2026-08-15 12:14:49.684847846 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         528.4kB
+Description:  local source for context
+Usage count:  1
+Last used:    2 weeks ago
+Type:         source.local
+
+ID:           vlmdp72p2zanm8dtxmxjvg65c
+Parents:
+ - mpu4ne9re82gloq35xwtdoetr
+Created at:   2026-08-21 20:24:31.233371384 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         576.6kB
+Description:  [runner 6/8] COPY --from=build /app/services/api services/api
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           o6lywwvt7ivk9tl7mmwkv0ess
+Parents:
+ - s94xx8dzl2co7p28o8vwf7fc5
+Created at:   2026-08-21 20:24:27.790648758 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         630.6kB
+Description:  [runner 2/8] COPY --from=build /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           ipef9fwq3n88txewtl6tdbe0f
+Parents:
+ - q8gzao90ex4nfs0ywlwtqp6wh
+Created at:   2026-08-15 12:14:53.022590916 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         1.661MB
+Description:  [stage-1 3/3] COPY --from=build /app/dist/index.html /usr/share/nginx/html/index.html
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           5izeq2l34e6m7e1rllc0idjuj
+Parents:
+ - 4rk4ks4eo45rn68f5aobsgezu
+Created at:   2026-08-14 17:53:43.070022179 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         1.713MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           dhbshd7zqfsoxatlvirlwbh0k
+Parents:
+ - a050qq2cgfljb7uvlgikcgefb
+Created at:   2026-08-15 12:14:49.677750679 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         1.91MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           u13vxoancnpxrdl9sbhygyqqg
+Parents:
+ - 7yzv35h6uktajpofsdv9xuhz6
+Created at:   2026-08-15 12:14:52.782969375 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         2.261MB
+Description:  mount / from exec /bin/sh -c node build.mjs
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           a050qq2cgfljb7uvlgikcgefb
+Created at:   2026-08-15 12:14:49.659564721 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         4.183MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           yhpw9pa0miuxsk7db0t4dlrlr
+Created at:   2026-08-15 12:14:49.667419346 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         4.2MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           3w26t9mkkc9o023zo8j56s4dw
+Parents:
+ - ciy12xntfqbym7x03vo2x9c9t
+Created at:   2026-08-14 17:54:45.677824138 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         5.37MB
+Description:  mount / from exec /bin/sh -c cd /workspace/papasito-next/launch_kit/packages/contracts && node ./build.mjs && npx tsc --emitDeclarationOnly
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           vgvapydzagd5yo7duvlsi586q
+Parents:
+ - q80v54sf5koi61g76d83hfjbv
+Created at:   2026-08-14 17:53:54.400556878 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         5.37MB
+Description:  mount / from exec /bin/sh -c cd /workspace/papasito-next/launch_kit/packages/contracts && node ./build.mjs && npx tsc --emitDeclarationOnly
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           kw36wqe92yk85ypr5hy01g5vv
+Parents:
+ - whujdct3srzwkjvtakhudg1is
+Created at:   2026-08-14 17:53:47.472649625 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         5.943MB
+Description:  [deps  4/18] COPY papasito-next/launch_kit/packages/contracts ./papasito-next/launch_kit/packages/contracts
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           l8699h6055ood3lv1bp7prn0c
+Parents:
+ - m6ew6c5iswepr6ik99jkqrayt
+Created at:   2026-08-15 12:14:49.724937096 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         6.748MB
+Description:  pulled from docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           mpg8sqlx0xw9ev84vt0anvvam
+Parents:
+ - lzxm0x4j3ban1snbudda4704k
+Created at:   2026-08-21 20:17:56.049735882 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         9.032MB
+Description:  pulled from docker.io/library/node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           whujdct3srzwkjvtakhudg1is
+Parents:
+ - 2gte88zv5ue7i7zd7behvyfn1
+Created at:   2026-08-14 17:53:47.405092125 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         10.57MB
+Description:  mount / from exec /bin/sh -c apt-get update && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           ohk4k72kgofs9i1kv2i9dwrwr
+Parents:
+ - sghkxvyx2paufqgd2kcrsqex4
+Created at:   2026-08-14 17:54:05.530650634 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         12.79MB
+Description:  mount / from exec /bin/sh -c cd /workspace/papasito-next/launch_kit/packages/http-runtime   && node ./build.mjs   && node -e "const fs=require('node:fs'); const cfg=JSON.parse(fs.readFileSync('tsconfig.json','utf8')); cfg.exclude=[...(cfg.exclude||[]),'src/**/*.test.ts']; fs.writeFileSync('tsconfig.docker.json', JSON.stringify(cfg));"   && npx tsc -p tsconfig.docker.json --emitDeclarationOnly
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           rj66gocm3plse2kzvhxownk3g
+Parents:
+ - yn2k03suo8bxsof93kjtyh6t5
+Created at:   2026-08-14 17:54:55.959295046 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         12.79MB
+Description:  mount / from exec /bin/sh -c cd /workspace/papasito-next/launch_kit/packages/http-runtime   && node ./build.mjs   && node -e "const fs=require('node:fs'); const cfg=JSON.parse(fs.readFileSync('tsconfig.json','utf8')); cfg.exclude=[...(cfg.exclude||[]),'src/**/*.test.ts']; fs.writeFileSync('tsconfig.docker.json', JSON.stringify(cfg));"   && npx tsc -p tsconfig.docker.json --emitDeclarationOnly
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           7j5zflpk5bgtqldlbzx0wfmlj
+Parents:
+ - kw36wqe92yk85ypr5hy01g5vv
+Created at:   2026-08-14 17:53:47.559023333 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         13.6MB
+Description:  [deps  5/18] COPY papasito-next/launch_kit/packages/http-runtime ./papasito-next/launch_kit/packages/http-runtime
+Usage count:  2
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           q2mu0pomyjku3r9auu075s9fq
+Created at:   2026-08-21 20:17:56.013238548 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         15.69MB
+Description:  local source for context
+Usage count:  1
+Last used:    7 days ago
+Type:         source.local
+
+ID:           ks9842fzwamksl28y1aljf8cb
+Parents:
+ - wf1vjge5ceaevsry9ho04a2rj
+Created at:   2026-08-21 20:18:17.452851919 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         15.72MB
+Description:  [build 1/2] COPY . .
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           zk83iqav41ed3ss3ho3ca8x08
+Parents:
+ - rghwz0fpfoz3ytewnfazfb1la
+Created at:   2026-08-15 12:14:49.797447596 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         19.85MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           k4gxyhevh5ppjy44p1xszerra
+Created at:   2026-08-14 17:53:43.027885387 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         20.45MB
+Description:  local source for context
+Usage count:  2
+Last used:    2 weeks ago
+Type:         source.local
+
+ID:           lh9a8n5vyxcs50bttrjlofs5v
+Created at:   2026-08-14 17:53:43.001433012 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         28.12MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           visb4ohoc72btfob1yf9q3oyr
+Parents:
+ - o6lywwvt7ivk9tl7mmwkv0ess
+Created at:   2026-08-21 20:24:27.939085549 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         30.99MB
+Description:  [runner 3/8] COPY --from=build /app/apps/web apps/web
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           yozawhko5oihcq18xcsfj5a7s
+Parents:
+ - vlmdp72p2zanm8dtxmxjvg65c
+Created at:   2026-08-21 20:24:31.367844009 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         33.92MB
+Description:  [runner 7/8] COPY --from=build /app/launch_kit launch_kit
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           4rk4ks4eo45rn68f5aobsgezu
+Parents:
+ - oeb4kfbvui31wpsi9nequ7nu2
+Created at:   2026-08-14 17:53:43.042861429 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         41.39MB
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           p8ruphxu62wa5q5vldhtjs8l9
+Parents:
+ - ks9842fzwamksl28y1aljf8cb
+Created at:   2026-08-21 20:18:17.679283919 +0000 UTC
+Mutable:      true
+Reclaimable:  true
+Shared:       false
+Size:         46.74MB
+Description:  mount / from exec /bin/sh -c pnpm --filter @walden/contracts build  && pnpm --filter @walden/http-runtime build  && pnpm --filter @walden/launch-kit-reporting-ui build  && pnpm --filter @walden-starter/web build
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           ciy12xntfqbym7x03vo2x9c9t
+Parents:
+ - yh8j0ft09dgbjcgziwqwtthx6
+Created at:   2026-08-14 17:54:41.293565595 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         58.21MB
+Description:  mount / from exec /bin/sh -c npm --prefix /workspace/papasito-next/launch_kit/packages/contracts install --no-fund --no-audit
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           q80v54sf5koi61g76d83hfjbv
+Parents:
+ - w8tl6105hpe2he8qynjb9unx6
+Created at:   2026-08-14 17:53:49.379687001 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         58.21MB
+Description:  mount / from exec /bin/sh -c npm --prefix /workspace/papasito-next/launch_kit/packages/contracts install --no-fund --no-audit
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           sghkxvyx2paufqgd2kcrsqex4
+Parents:
+ - vgvapydzagd5yo7duvlsi586q
+Created at:   2026-08-14 17:53:56.215919379 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         73.68MB
+Description:  mount / from exec /bin/sh -c npm --prefix /workspace/papasito-next/launch_kit/packages/http-runtime install --no-fund --no-audit
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           yn2k03suo8bxsof93kjtyh6t5
+Parents:
+ - 3w26t9mkkc9o023zo8j56s4dw
+Created at:   2026-08-14 17:54:47.50216475 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         73.68MB
+Description:  mount / from exec /bin/sh -c npm --prefix /workspace/papasito-next/launch_kit/packages/http-runtime install --no-fund --no-audit
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           21qzwmhxjzl5zcmef0pav3ccy
+Parents:
+ - hu7yzhgqdaujxrgcwhrzotow6
+Created at:   2026-08-14 17:54:57.637170213 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         81.15MB
+Description:  mount / from exec /bin/sh -c npm ci
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           48x34zjzsy2hcmck9e5vqluem
+Parents:
+ - bwqip9lvrzzvharyzli9car02
+Created at:   2026-08-15 12:14:52.697429708 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         91.61MB
+Description:  mount / from exec /bin/sh -c npm install --no-audit --no-fund
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           2iwhtdxrjqzrh1wk3njpd8ysd
+Parents:
+ - x0iaf5xrn80n9blzhjyvx7aoz
+Created at:   2026-08-14 17:54:07.304433468 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         92.82MB
+Description:  mount / from exec /bin/sh -c npm ci
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           tpjo00q6cscvhykxbot5mqsy9
+Created at:   2026-08-21 20:17:55.990073798 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         113.5MB
+Description:  pulled from docker.io/library/node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           m6ew6c5iswepr6ik99jkqrayt
+Parents:
+ - yhpw9pa0miuxsk7db0t4dlrlr
+Created at:   2026-08-15 12:14:49.694607304 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         173.4MB
+Description:  pulled from docker.io/library/node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+Usage count:  1
+Last used:    2 weeks ago
+Type:         regular
+
+ID:           lzxm0x4j3ban1snbudda4704k
+Parents:
+ - l4w3rrvxk7ystrv9g9i25wcsv
+Created at:   2026-08-21 20:17:56.02804859 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         203.9MB
+Description:  pulled from docker.io/library/node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           ydqjrurk46fkjvfe9kveg41bv
+Parents:
+ - visb4ohoc72btfob1yf9q3oyr
+Created at:   2026-08-21 20:24:30.960842134 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       true
+Size:         1.045GB
+Description:  [runner 4/8] COPY --from=build /app/node_modules node_modules
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+ID:           wf1vjge5ceaevsry9ho04a2rj
+Parents:
+ - fslxlg9v65bfqxmnexfn95egk
+Created at:   2026-08-21 20:18:17.022468836 +0000 UTC
+Mutable:      false
+Reclaimable:  true
+Shared:       false
+Size:         1.104GB
+Description:  mount / from exec /bin/sh -c pnpm install --no-frozen-lockfile
+Usage count:  1
+Last used:    7 days ago
+Type:         regular
+
+Shared:		2.043GB
+Private:	1.482GB
+Reclaimable:	3.525GB
+Total:		3.525GB
