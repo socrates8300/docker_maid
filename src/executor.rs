@@ -382,10 +382,21 @@ async fn delete_target(docker: &Docker, target: &Decision) -> Result<DeleteEffec
                 .force(false)
                 .noprune(true)
                 .build();
-            docker
-                .remove_image(&target.resource.id, Some(options), None)
-                .await
-                .map(|_| DeleteEffect::Removed("removed".to_owned()))
+            // DELETE /images/{id} refuses with 409 when several repositories
+            // reference the same image. Untag every non-dangling reference
+            // first (Docker CLI semantics); the last reference removal
+            // deletes the image record. Dangling images (no tag) delete by id.
+            let id = &target.resource.id;
+            let mut refs = image_removal_names(&target.resource, id);
+            if refs.is_empty() {
+                refs.push(id.clone());
+            }
+            for name in &refs {
+                docker
+                    .remove_image(name, Some(options.clone()), None)
+                    .await?;
+            }
+            Ok(DeleteEffect::Removed("removed".to_owned()))
         }
         ResourceKind::Volume => {
             let options = RemoveVolumeOptionsBuilder::default().force(false).build();
@@ -410,6 +421,18 @@ async fn delete_target(docker: &Docker, target: &Decision) -> Result<DeleteEffec
                 .map(|response| classify_prune_response(&target.resource.id, &response))
         }
     }
+}
+
+/// Repository references (repo:tag names) an image delete must untag one at
+/// a time. Docker requires per-terminal removal for multi-repository images;
+/// a bare ID delete fails with 409 in that case. Dangling images carry no
+/// tags, so the caller falls back to the image id itself.
+fn image_removal_names(item: &crate::plan::InventoryItem, id: &str) -> Vec<String> {
+    item.search_names
+        .iter()
+        .filter(|name| name.as_str() != id && name.as_str() != "<none>:<none>")
+        .cloned()
+        .collect()
 }
 
 fn classify_prune_response(target_id: &str, response: &BuildPruneResponse) -> DeleteEffect {
@@ -592,6 +615,39 @@ mod tests {
         };
 
         assert!(!configuration_is_unchanged(&initial_config, "", &current));
+    }
+
+    #[test]
+    fn multi_tag_image_untags_every_reference_before_id_delete() {
+        let mut item = decision(Action::Remove, false, "images").resource;
+        item.kind = ResourceKind::Image;
+        item.id = "sha256:abc".to_owned();
+        item.search_names = vec![
+            "node:22.21.1".to_owned(),
+            "node:22.21.1-bookworm".to_owned(),
+            "sha256:abc".to_owned(),
+        ];
+        let names = image_removal_names(&item, &item.id);
+        assert_eq!(names, vec!["node:22.21.1", "node:22.21.1-bookworm"]);
+    }
+
+    #[test]
+    fn dangling_image_falls_back_to_id_removal() {
+        let mut item = decision(Action::Remove, false, "images").resource;
+        item.kind = ResourceKind::Image;
+        item.id = "sha256:abc".to_owned();
+        item.search_names = vec!["<none>:<none>".to_owned(), "sha256:abc".to_owned()];
+        assert!(image_removal_names(&item, &item.id).is_empty());
+    }
+
+    #[test]
+    fn single_tag_image_untags_that_tag() {
+        let mut item = decision(Action::Remove, false, "images").resource;
+        item.kind = ResourceKind::Image;
+        item.id = "sha256:abc".to_owned();
+        item.search_names = vec!["alpine:3.20".to_owned(), "sha256:abc".to_owned()];
+        let names = image_removal_names(&item, &item.id);
+        assert_eq!(names, vec!["alpine:3.20"]);
     }
 
     #[test]

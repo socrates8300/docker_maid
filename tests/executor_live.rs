@@ -3,6 +3,7 @@ use bollard::models::{
 };
 use bollard::query_parameters::{
     CreateContainerOptionsBuilder, CreateImageOptionsBuilder, RemoveContainerOptionsBuilder,
+    TagImageOptionsBuilder,
 };
 use bollard::Docker;
 use docker_maid::config::{load_config, Config};
@@ -209,6 +210,79 @@ fn run_applied_with_stdout(config: &Path, stdout: impl Into<Stdio>) -> Output {
         .stderr(Stdio::piped())
         .output()
         .expect("run live clean")
+}
+
+#[tokio::test]
+async fn live_multi_tag_image_untags_every_reference() {
+    if !live_test_enabled() {
+        return;
+    }
+
+    let docker = Docker::connect_with_defaults().expect("connect to live Docker");
+    let root = temp_dir();
+    let unique = root.file_name().expect("temporary name").to_string_lossy();
+    ensure_reference_image(&docker).await;
+
+    let tag_one = format!("maid-{unique}:one");
+    let tag_two = format!("maid-{unique}:two");
+    for tag in [&tag_one, &tag_two] {
+        let options = TagImageOptionsBuilder::default()
+            .repo(tag.split(':').next().expect("repo"))
+            .tag(tag.split(':').nth(1).expect("tag"))
+            .build();
+        docker
+            .tag_image(REFERENCE_IMAGE, Some(options))
+            .await
+            .expect("tag the reference image twice");
+    }
+
+    let config = root.join("multi-tag.toml");
+    fs::write(
+        &config,
+        format!(
+            "\n[[rules.images]]\nid = \"manual/live-multi-tag\"\nname = \"live-multi-tag\"\nscope = \"all\"\nallow_unscoped = true\nunused_for = \"1s\"\nimage_tag_patterns = [\"maid-{unique}*\"]\ndangling = true\n[rules.images.select]\nnames = [\".+\"]\n"
+        ),
+    )
+    .expect("write multi-tag config");
+
+    let (initial_config, initial_source, plan, observations) = capture_plan(&config).await;
+    assert!(
+        plan.decisions.iter().any(|decision| {
+            decision.action == Action::Remove && decision.resource.kind == ResourceKind::Image
+        }),
+        "multi-tag image was not selected"
+    );
+    let store = ProtectionStore::new(StatePaths::new(root.join("runtime-state")));
+    observe_past_floor(&config).await;
+    let report = execute_plan(
+        &config,
+        &initial_config,
+        &initial_source,
+        &plan,
+        &store,
+        &observations,
+    )
+    .await
+    .expect("execute multi-tag plan");
+
+    let still_referenced = docker.inspect_image(&tag_one).await.is_ok();
+    let base_gone = docker.inspect_image(REFERENCE_IMAGE).await.is_err();
+    let _ = fs::remove_dir_all(root);
+    assert!(
+        !report
+            .outcomes
+            .iter()
+            .any(|o| o.status == TargetStatus::Failed),
+        "multi-tag delete must not 409"
+    );
+    assert!(
+        !still_referenced,
+        "the first tagged reference was not removed"
+    );
+    assert!(
+        base_gone,
+        "the image must be fully gone once every reference is untagged"
+    );
 }
 
 #[tokio::test]
