@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "gate": "cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings",
+  "verify": "cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test"
+}
